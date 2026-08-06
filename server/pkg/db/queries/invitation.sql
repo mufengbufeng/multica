@@ -1,5 +1,5 @@
 -- name: CreateInvitation :one
-INSERT INTO workspace_invitation (workspace_id, inviter_id, invitee_email, invitee_user_id, role)
+INSERT INTO workspace_invitation (workspace_id, inviter_id, invitee_email, token_hash, role)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
@@ -25,20 +25,37 @@ FROM workspace_invitation wi
 JOIN workspace w ON w.id = wi.workspace_id
 JOIN "user" u ON u.id = wi.inviter_id
 WHERE wi.status = 'pending'
-  AND (wi.invitee_user_id = $1 OR wi.invitee_email = $2)
+  AND wi.invitee_user_id = $1
   AND wi.expires_at > now()
 ORDER BY wi.created_at DESC;
+
+-- name: ClaimInvitation :one
+UPDATE workspace_invitation
+SET invitee_user_id = $3,
+    updated_at = now()
+WHERE id = $1
+  AND token_hash = $2
+  AND status = 'pending'
+  AND expires_at > now()
+  AND (invitee_user_id IS NULL OR invitee_user_id = $3)
+RETURNING *;
 
 -- name: AcceptInvitation :one
 UPDATE workspace_invitation
 SET status = 'accepted', updated_at = now()
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1
+  AND invitee_user_id = $2
+  AND status = 'pending'
+  AND expires_at > now()
 RETURNING *;
 
 -- name: DeclineInvitation :one
 UPDATE workspace_invitation
 SET status = 'declined', updated_at = now()
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1
+  AND invitee_user_id = $2
+  AND status = 'pending'
+  AND expires_at > now()
 RETURNING *;
 
 -- name: RevokeInvitation :exec

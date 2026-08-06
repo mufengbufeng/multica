@@ -388,17 +388,20 @@ done
 
 #### 2. Create a test user and token (automated auth)
 
-For deterministic local automation, set `MULTICA_DEV_VERIFICATION_CODE=888888`
-in your env file before starting the backend:
+Use a stable local password for automated authentication:
 
 ```bash
-curl -s -X POST "$SERVER/auth/send-code" \
-  -H "Content-Type: application/json" \
-  -d '{"email": "dev@localhost"}'
+AUTH_BODY='{"email":"dev@localhost","password":"development-password"}'
 
-JWT=$(curl -s -X POST "$SERVER/auth/verify-code" \
+JWT=$(curl -s -X POST "$SERVER/auth/register" \
   -H "Content-Type: application/json" \
-  -d '{"email": "dev@localhost", "code": "888888"}' | jq -r '.token')
+  -d "$AUTH_BODY" | jq -r '.token')
+
+if [ "$JWT" = "null" ] || [ -z "$JWT" ]; then
+  JWT=$(curl -s -X POST "$SERVER/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "$AUTH_BODY" | jq -r '.token')
+fi
 
 PAT=$(curl -s -X POST "$SERVER/api/tokens" \
   -H "Authorization: Bearer $JWT" \
@@ -492,9 +495,8 @@ This automatically:
 3. Starts and manages its own daemon instance
 4. Connects to the local backend
 
-Login in the Desktop UI with `dev@localhost` and the generated code from the
-backend logs. If you set `MULTICA_DEV_VERIFICATION_CODE=888888` before starting
-the backend, you can use `888888` instead.
+Log in to the Desktop UI with `dev@localhost` and the password
+`development-password` used for local automation.
 
 If the backend runs on a non-default port (worktree), create
 `apps/desktop/.env.development.local`:

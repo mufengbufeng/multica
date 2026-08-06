@@ -11,9 +11,31 @@ import (
 )
 
 func newTestHandler(cfg Config) *Handler {
-	return &Handler{
-		cfg: cfg,
-	}
+	return &Handler{cfg: cfg}
+}
+
+// mockDB is shared by handler tests that exercise sqlc query error paths
+// without a PostgreSQL connection.
+type mockDB struct {
+	db.DBTX
+	getUserErr error
+}
+
+func (m *mockDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	return &mockRow{err: m.getUserErr}
+}
+
+func (m *mockDB) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	return pgconn.NewCommandTag("INSERT 1"), nil
+}
+
+type mockRow struct {
+	pgx.Row
+	err error
+}
+
+func (m *mockRow) Scan(dest ...interface{}) error {
+	return m.err
 }
 
 func TestSignupGating(t *testing.T) {
@@ -43,72 +65,35 @@ func TestSignupGating(t *testing.T) {
 	}
 }
 
-type mockDB struct {
-	db.DBTX
-	getUserErr error
+func TestNormalizeEmail(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+		valid bool
+	}{
+		{" Alice@Example.com ", "alice@example.com", true},
+		{"alice@example.com", "alice@example.com", true},
+		{"alice@example.com (Alice)", "", false},
+		{"not-an-email", "", false},
+		{"", "", false},
+	}
+
+	for _, tt := range tests {
+		got, valid := normalizeEmail(tt.input)
+		if got != tt.want || valid != tt.valid {
+			t.Fatalf("normalizeEmail(%q) = (%q, %t), want (%q, %t)", tt.input, got, valid, tt.want, tt.valid)
+		}
+	}
 }
 
-func (m *mockDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	return &mockRow{err: m.getUserErr}
-}
-
-func (m *mockDB) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
-	return pgconn.NewCommandTag("INSERT 1"), nil
-}
-
-type mockRow struct {
-	pgx.Row
-	err error
-}
-
-func (m *mockRow) Scan(dest ...interface{}) error {
-	return m.err
-}
-
-func TestFindOrCreateUserGating(t *testing.T) {
-	t.Run("new_user_blocked", func(t *testing.T) {
-		cfg := Config{AllowSignup: false}
-		h := newTestHandler(cfg)
-		h.Queries = db.New(&mockDB{getUserErr: pgx.ErrNoRows})
-
-		_, isNew, err := h.findOrCreateUser(context.Background(), "new@blocked.com")
-		if err == nil {
-			t.Fatal("expected error for new user when signup disabled")
-		}
-		if isNew {
-			t.Fatal("isNew should be false when signup is blocked")
-		}
-		if !strings.Contains(err.Error(), "registration is disabled") {
-			t.Fatalf("expected registration disabled error, got %v", err)
-		}
-	})
-
-	t.Run("existing_user_allowed", func(t *testing.T) {
-		cfg := Config{AllowSignup: false}
-		h := newTestHandler(cfg)
-		// mockDB returns nil error for Scan, simulating user found
-		h.Queries = db.New(&mockDB{getUserErr: nil})
-
-		_, isNew, err := h.findOrCreateUser(context.Background(), "existing@test.com")
-		if err != nil {
-			t.Fatalf("expected no error for existing user, got %v", err)
-		}
-		if isNew {
-			t.Fatal("existing user should not be flagged as new")
-		}
-	})
-
-	t.Run("whitelisted_user_allowed", func(t *testing.T) {
-		cfg := Config{AllowSignup: false, AllowedEmails: []string{"whitelisted@test.com"}}
-		h := newTestHandler(cfg)
-		h.Queries = db.New(&mockDB{getUserErr: pgx.ErrNoRows})
-
-		// This will pass checkSignupAllowed and move to CreateUser.
-		// Our mockDB Exec returns success, but Queries.CreateUser might expect QueryRow for RETURNING id.
-		// Let's see if it works.
-		_, _, err := h.findOrCreateUser(context.Background(), "whitelisted@test.com")
-		if err != nil && strings.Contains(err.Error(), "registration is disabled") {
-			t.Fatalf("expected whitelisted user to pass signup check, but got %v", err)
-		}
-	})
+func TestValidatePassword(t *testing.T) {
+	if err := validatePassword("short"); err == nil {
+		t.Fatal("expected short password to be rejected")
+	}
+	if err := validatePassword("correct-password"); err != nil {
+		t.Fatalf("expected valid password, got %v", err)
+	}
+	if err := validatePassword(strings.Repeat("a", maxPasswordLength+1)); err == nil {
+		t.Fatal("expected overlong password to be rejected")
+	}
 }

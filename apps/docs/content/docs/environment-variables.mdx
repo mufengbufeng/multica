@@ -20,10 +20,10 @@ MULTICA_APP_URL=https://multica.example.com
 MULTICA_PUBLIC_URL=https://api.multica.example.com
 ```
 
-You also need to pick an email service, otherwise verification codes and invitations are only written to the server log.
+Email delivery is optional for password sign-in. Configure it for workspace invitations and the temporary legacy-account verification flow. Invitation links and verification codes are never written to the server log.
 
 <Callout type="warning">
-Do not use the default `JWT_SECRET` in production, and do not set `MULTICA_DEV_VERIFICATION_CODE`.
+Do not use the default `JWT_SECRET` in production.
 </Callout>
 
 ## API and database
@@ -37,6 +37,7 @@ Do not use the default `JWT_SECRET` in production, and do not set `MULTICA_DEV_V
 | `JWT_SECRET` | fixed development value | Secret for sign-in JWTs and some signing flows |
 | `APP_ENV` | empty | Set to `production` in production |
 | `AUTH_TOKEN_TTL` | `720h` (30 days) | Lifetime of browser JWTs and cookies; accepts a Go duration or a positive integer of seconds |
+| `AUTH_LEGACY_AUTH_ENABLED` | `true` | Keeps legacy installed-client email-code and Google routes available only for existing passwordless accounts; set `false` after migration |
 | `LOG_LEVEL` | application default | Log level |
 | `MULTICA_SHUTDOWN_HOLD_DURATION` | `0` | How long to wait after a termination signal before graceful shutdown begins |
 
@@ -82,14 +83,9 @@ SMTP takes priority over Resend whenever `SMTP_HOST` is non-empty.
 | `SMTP_TLS` | `starttls` | `implicit`, `smtps`, or `ssl` means implicit TLS; port 465 enables it automatically |
 | `SMTP_TLS_INSECURE` | `false` | Skips certificate verification; trusted internal networks only |
 | `SMTP_EHLO_NAME` | hostname | EHLO/FQDN required by strict relays |
-
-### Google OAuth
-
-| Variable | Default | Description |
-|---|---|---|
-| `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:3000/auth/callback` | Must exactly match the callback URL in the Google Console |
+| `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID used only by legacy installed clients while compatibility is enabled |
+| `GOOGLE_CLIENT_SECRET` | empty | Matching Google OAuth client secret; keep in a deployment secret |
+| `GOOGLE_REDIRECT_URI` | empty | Exact redirect URI registered for the legacy Google OAuth client |
 
 ### Signup scope
 
@@ -99,7 +95,6 @@ SMTP takes priority over Resend whenever `SMTP_HOST` is non-empty.
 | `ALLOWED_EMAILS` | empty | Full email addresses allowed to sign up, comma-separated |
 | `ALLOWED_EMAIL_DOMAINS` | empty | Email domains allowed to sign up, comma-separated |
 | `DISABLE_WORKSPACE_CREATION` | `false` | Blocks all users from creating workspaces; no owner/admin exception |
-| `MULTICA_DEV_VERIFICATION_CODE` | empty | Fixed 6-digit test code for non-production environments |
 
 For the exact allowlist evaluation order, see [Sign-in and signup](/auth-setup#signup-restrictions).
 
@@ -142,16 +137,18 @@ Use `ATTACHMENT_DOWNLOAD_MODE=proxy` when the endpoint — an internal MinIO, fo
 
 | Variable | Default | Description |
 |---|---|---|
-| `REDIS_URL` | empty | Used for auth rate limiting, realtime events, and the token cache; when unset, realtime events fall back to in-process memory and auth rate limiting is off |
+| `AUTH_PASSWORD_EMAIL_LIMIT` | `5` | Durable attempts per email within the authentication window; stored as a keyed hash in PostgreSQL |
+| `AUTH_PASSWORD_IP_LIMIT` | `20` | Durable attempts per client IP within the authentication window; stored as a keyed hash in PostgreSQL |
+| `AUTH_PASSWORD_ATTEMPT_WINDOW` | `15m` | Window for durable password and legacy-auth attempt limits |
+| `REDIS_URL` | empty | Optional auth burst limiter, realtime events, and token cache; durable authentication limits remain on when unset |
 | `REDIS_DISABLE_CLIENT_NAME` | `false` | Set `true` when a managed Redis blocks `CLIENT SETNAME` |
-| `RATE_LIMIT_AUTH` | `5` | Per-IP requests per minute to send a verification code or start Google sign-in |
-| `RATE_LIMIT_AUTH_VERIFY` | `20` | Per-IP code verifications per minute |
+| `RATE_LIMIT_AUTH` | `5` | Per-IP login and registration requests per minute |
 | `RATE_LIMIT_TRUSTED_PROXIES` | empty | Comma-separated proxy CIDRs allowed to provide `X-Forwarded-For` |
 | `MULTICA_TRUSTED_PROXIES` | empty | Trusted proxy CIDRs for automation webhooks and realtime connections |
 
 Deployments behind a reverse proxy must list their real proxy ranges. Do not blanket-trust all sources, or clients can forge forwarded IPs.
 
-The `RATE_LIMIT_*` variables above only take effect once `REDIS_URL` is set; without it, the startup log notes that rate limiting is disabled. If Redis becomes temporarily unavailable, the limiter fails open and does not block normal sign-ins.
+The `RATE_LIMIT_*` variables apply only to the optional Redis burst limiter. PostgreSQL limits are enforced independently for password and legacy authentication, and fail closed if their database query cannot run. If Redis becomes temporarily unavailable, the burst limiter fails open while the durable limits remain active.
 
 ## External integrations
 

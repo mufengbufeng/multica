@@ -20,10 +20,10 @@ MULTICA_APP_URL=https://multica.example.com
 MULTICA_PUBLIC_URL=https://api.multica.example.com
 ```
 
-还需要选择一种邮件服务，否则验证码和邀请只会写入服务端日志。
+密码登录不需要邮件服务。工作区邀请和临时旧账号迁移需要邮件投递；邀请链接和验证码都是能力凭据，绝不会写入服务端日志。
 
 <Callout type="warning">
-不要在生产环境使用默认的 `JWT_SECRET`，也不要设置 `MULTICA_DEV_VERIFICATION_CODE`。
+不要在生产环境使用默认的 `JWT_SECRET`。
 </Callout>
 
 ## API 与数据库
@@ -37,6 +37,7 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 | `JWT_SECRET` | 开发用固定值 | 登录 JWT、部分签名流程使用的密钥 |
 | `APP_ENV` | 空 | 生产环境设为 `production` |
 | `AUTH_TOKEN_TTL` | `720h`（30 天） | 浏览器 JWT 与 cookie 有效期；接受 Go duration 或正整数秒数 |
+| `AUTH_LEGACY_AUTH_ENABLED` | `true` | 为没有密码的已有账号保留旧安装版客户端的邮箱验证码和 Google 路由；迁移完成后设为 `false` |
 | `LOG_LEVEL` | 应用默认 | 日志级别 |
 | `MULTICA_SHUTDOWN_HOLD_DURATION` | `0` | 收到终止信号后，开始优雅退出前等待多久 |
 
@@ -82,14 +83,9 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 | `SMTP_TLS` | `starttls` | `implicit`、`smtps` 或 `ssl` 表示隐式 TLS；465 会自动启用 |
 | `SMTP_TLS_INSECURE` | `false` | 跳过证书校验，仅用于可信内网 |
 | `SMTP_EHLO_NAME` | 主机名 | 严格 relay 要求的 EHLO/FQDN |
-
-### Google OAuth
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `GOOGLE_CLIENT_ID` | 空 | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | 空 | Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:3000/auth/callback` | 必须与 Google Console 中的回调地址完全一致 |
+| `GOOGLE_CLIENT_ID` | 空 | 兼容窗口内旧安装版客户端使用的 Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | 空 | 对应的 Google OAuth client secret；请放入部署密钥 |
+| `GOOGLE_REDIRECT_URI` | 空 | 旧 Google OAuth 客户端在 Google 注册的精确回调地址 |
 
 ### 注册范围
 
@@ -99,7 +95,6 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 | `ALLOWED_EMAILS` | 空 | 允许注册的完整邮箱，逗号分隔 |
 | `ALLOWED_EMAIL_DOMAINS` | 空 | 允许注册的邮箱域名，逗号分隔 |
 | `DISABLE_WORKSPACE_CREATION` | `false` | 禁止所有用户新建工作区；没有 owner/admin 例外 |
-| `MULTICA_DEV_VERIFICATION_CODE` | 空 | 非 production 环境使用的固定 6 位测试验证码 |
 
 白名单的准确判断顺序见[登录与注册](/auth-setup#注册范围控制)。
 
@@ -142,16 +137,18 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `REDIS_URL` | 空 | 用于认证限流、实时事件和 token cache；未设置时实时事件回退到进程内存，认证限流不生效 |
+| `AUTH_PASSWORD_EMAIL_LIMIT` | `5` | 单个邮箱在认证窗口内的持久化尝试次数；邮箱哈希存于 PostgreSQL |
+| `AUTH_PASSWORD_IP_LIMIT` | `20` | 单个客户端 IP 在认证窗口内的持久化尝试次数；IP 哈希存于 PostgreSQL |
+| `AUTH_PASSWORD_ATTEMPT_WINDOW` | `15m` | 密码和旧认证的持久化限流窗口 |
+| `REDIS_URL` | 空 | 可选的认证突发限流、实时事件和 token cache；未设置时持久化认证限流仍然生效 |
 | `REDIS_DISABLE_CLIENT_NAME` | `false` | 托管 Redis 禁止 `CLIENT SETNAME` 时设为 `true` |
-| `RATE_LIMIT_AUTH` | `5` | 单 IP 每分钟发送验证码或发起 Google 登录的次数 |
-| `RATE_LIMIT_AUTH_VERIFY` | `20` | 单 IP 每分钟验证验证码的次数 |
+| `RATE_LIMIT_AUTH` | `5` | 单 IP 每分钟登录或注册的次数 |
 | `RATE_LIMIT_TRUSTED_PROXIES` | 空 | 允许提供 `X-Forwarded-For` 的代理 CIDR，逗号分隔 |
 | `MULTICA_TRUSTED_PROXIES` | 空 | 自动化 webhook 与实时连接使用的可信代理 CIDR |
 
 反向代理后的部署需要填写真实代理网段。不要直接信任所有来源，否则客户端可以伪造转发 IP。
 
-上面的 `RATE_LIMIT_*` 只有在设置了 `REDIS_URL` 后才生效；未设置时启动日志会提示 rate limiting disabled。Redis 临时不可用时限流选择放行请求，不会阻断正常登录。
+`RATE_LIMIT_*` 只控制可选的 Redis 突发限流。密码和旧认证独立使用 PostgreSQL 持久化限流；其数据库查询不可用时会拒绝认证请求。Redis 临时不可用时，突发限流会放行，但持久化限流仍然有效。
 
 ## 外部集成
 

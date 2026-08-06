@@ -348,7 +348,10 @@ export interface AppConfigResponse {
   // (MUL-3254). Older servers omit the field; treat that as false.
   cdn_signed?: boolean;
   allow_signup: boolean;
+  /** Present only while the installed-client Google compatibility route is enabled. */
   google_client_id?: string;
+  /** Enables the temporary old-account password migration flow in the web UI. */
+  legacy_auth_enabled?: boolean;
   posthog_key?: string;
   posthog_host?: string;
   analytics_environment?: string;
@@ -538,6 +541,7 @@ export const AppConfigSchema = z.object({
   cdn_signed: BooleanWithDefaultSchema(false),
   allow_signup: BooleanWithDefaultSchema(true),
   google_client_id: OptionalStringSchema,
+  legacy_auth_enabled: BooleanWithDefaultSchema(false),
   posthog_key: OptionalStringSchema,
   posthog_host: OptionalStringSchema,
   analytics_environment: OptionalStringSchema,
@@ -554,12 +558,29 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   cdn_signed: false,
   allow_signup: true,
   google_client_id: "",
+  legacy_auth_enabled: false,
   daemon_server_url: "",
   daemon_app_url: "",
   workspace_creation_disabled: false,
   vcs_integration_available: false,
   feature_flags: {},
 };
+
+export const InvitationSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  inviter_id: z.string(),
+  invitee_email: z.string(),
+  invitee_user_id: z.string().nullable(),
+  role: z.enum(["owner", "admin", "member"]),
+  status: z.enum(["pending", "accepted", "declined", "expired"]),
+  created_at: z.string(),
+  updated_at: z.string(),
+  expires_at: z.string(),
+  inviter_name: z.string().optional(),
+  inviter_email: z.string().optional(),
+  workspace_name: z.string().optional(),
+}).loose();
 
 // Preference keys may grow over time, so keep both the key and value spaces
 // forward-compatible while still rejecting non-string persisted data.
@@ -1822,6 +1843,11 @@ export const UserSchema = z.object({
   timezone: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
+}).loose();
+
+export const LoginResponseSchema = z.object({
+  token: z.string().min(1),
+  user: UserSchema,
 }).loose();
 
 export const EMPTY_USER: User = {

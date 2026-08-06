@@ -1,17 +1,23 @@
 ---
 title: ログインとサインアップ
-description: メール認証コード、Google ログイン、新規登録の範囲を設定します。
+description: メールアドレスとパスワードによるアクセス、および新規登録の範囲を設定します。
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Multica はデフォルトでメール認証コードによるログインを使い、Google OAuth を追加することもできます。既存のユーザーはいつでも再ログインできます。サインアップ制限は、新しいアカウントを作成できるかどうかだけを決めます。
+Multica はメールアドレスとパスワードでログインします。登録時にメールアドレスの所有確認は行いません。既存ユーザーは設定したパスワードでログインし、サインアップ制限は新しいアカウントを作成できるかだけを決めます。
 
-## メール認証コード
+## メールアドレスとパスワード
 
-ユーザーがメールアドレスを入力すると、Multica は 6 桁の認証コードを送信します。コードは 10 分間有効で、検証に成功するとブラウザにログイン cookie が発行されます。
+ログイン画面で**アカウントを作成**を選び、メールアドレスと 8 文字以上のパスワードを入力します。登録後は同じメールアドレスとパスワードでログインします。
 
-メールは Resend または SMTP で送信できます。両方を設定した場合は `SMTP_HOST` が優先されます。
+<Callout type="warning">
+登録ではメールアドレスの所有確認を行いません。既知のグループだけにアクセスを限定する場合は、`ALLOW_SIGNUP=false` と allowlist を併用してください。
+</Callout>
+
+## 招待メールの配信
+
+パスワードログインにメール配信は不要です。ワークスペース招待リンクや、旧アカウント移行期間中の認証コードを送る場合は Resend または SMTP を設定します。両方を設定した場合は `SMTP_HOST` が優先されます。
 
 ### Resend を使う
 
@@ -39,63 +45,17 @@ SMTP_PASSWORD=<password>
 SMTP_FROM_EMAIL=noreply@example.com
 ```
 
-一般的な接続方式:
-
 | シナリオ | 設定 |
 |---|---|
 | 内部の匿名 relay | `SMTP_PORT=25`。ユーザー名とパスワードは空のまま |
 | STARTTLS | `SMTP_PORT=587`。サーバーが対応していればデフォルトで TLS にアップグレード |
 | 暗黙的 TLS | `SMTP_PORT=465`、または `SMTP_TLS=implicit` を明示的に設定 |
 
-`SMTP_FROM_EMAIL` が未設定の場合は `RESEND_FROM_EMAIL` にフォールバックします。プライベート CA や自己署名証明書を使う場合は、CA をコンテナの信頼ストアに追加してください。`SMTP_TLS_INSECURE=true` は証明書検証をスキップするため、信頼できる内部ネットワークで一時的に使う場合に限ってください。
+`SMTP_FROM_EMAIL` が未設定の場合は `RESEND_FROM_EMAIL` にフォールバックします。プライベート CA や自己署名証明書を使う場合は CA をコンテナの信頼ストアに追加してください。`SMTP_TLS_INSECURE=true` は証明書検証をスキップするため、信頼できる内部ネットワークで一時的に使う場合に限ってください。
 
-一部の厳格な relay は、有効な EHLO 名も要求します:
+メールサービスがなくてもサーバーは起動しますが、新しいワークスペース招待と旧アカウントの認証コード要求は拒否されます。招待リンクと認証コードは能力資格情報のため、ログには出力されません。
 
-```dotenv
-SMTP_EHLO_NAME=mail.example.com
-```
-
-### メールサービスがない場合の動作
-
-サーバーは起動しますが、認証コードと招待リンクはログに書き込まれるだけで、メールは送信されません。ローカル開発には向きますが、プロダクションには向きません。
-
-起動ログには、現在使っているのが `Resend API`、`SMTP relay`、`DEV mode` のどれかが表示されます。
-
-## ローカル固定認証コード
-
-ローカルの自動テストでは、固定の認証コードを設定できます:
-
-```dotenv
-APP_ENV=development
-MULTICA_DEV_VERIFICATION_CODE=888888
-```
-
-認証コードは 6 桁の数字である必要があります。`APP_ENV=production` のときは固定コードは無視されます。
-
-<Callout type="warning">
-公開インスタンスで固定認証コードを有効にしないでください。プロダクションの組み合わせは `APP_ENV=production` と空の `MULTICA_DEV_VERIFICATION_CODE` です。
-</Callout>
-
-## Google ログイン
-
-1. [Google Cloud Console](https://console.cloud.google.com/) で OAuth 2.0 client を作成します。
-2. Multica フロントエンドのコールバックアドレスを **Authorized redirect URIs** に追加します:
-
-   ```text
-   https://multica.example.com/auth/callback
-   ```
-
-3. 次を設定します:
-
-   ```dotenv
-   GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxx
-   GOOGLE_REDIRECT_URI=https://multica.example.com/auth/callback
-   ```
-
-4. API サービスを再起動します。
-
-Google Console と `GOOGLE_REDIRECT_URI` のアドレスは、プロトコル、ポート、末尾のスラッシュを含めて完全に一致している必要があります。設定が反映されると、ログインページに Google ログインボタンが表示されます。フロントエンドイメージの再ビルドは不要です。
+このリリースへのアップグレードでは、能力トークン導入前に作成された保留中の招待がすべて失効します。引き続き有効にしたい招待は再送してください。
 
 ## サインアップ制限
 
@@ -127,21 +87,18 @@ ALLOWED_EMAILS=partner@example.net
 ```
 
 <Callout type="info">
-2 つの allowlist は、`ALLOW_SIGNUP=false` のときには明示的な例外リストとしても機能します。
+2 つの allowlist は、`ALLOW_SIGNUP=false` のときには明示的な例外リストとしても機能します。事前に作成され、まだパスワードのないアカウントは、公開登録で初期パスワードを設定できません。
 </Callout>
 
-## 招待とサインアップ制限
+## 旧アカウントの移行
 
-招待はサインアップ制限を自動的には迂回しません:
+インストール済みクライアントとパスワードログイン以前に作成されたアカウントでは、制御された互換期間中に `AUTH_LEGACY_AUTH_ENABLED=true` を使います。旧メールコードと Google エンドポイントは、パスワードを設定していない既存アカウントだけを認証し、アカウント作成やパスワード変更は行いません。
 
-- 相手がすでに Multica アカウントを持っている場合は、ログインして招待を受諾できます。
-- まだアカウントがない場合は、そのメールアドレスが上記のサインアップルールを満たす必要があります。
-
-オープンなサインアップを無効にしたインスタンスで新しいメンバーを招待するときは、先に相手のメールアドレスを `ALLOWED_EMAILS` に追加してください。アカウントが作成され、招待が受諾されたら、エントリを削除して構いません。
+旧アカウントがメールコードでログインすると、Web のログイン画面でパスワード設定を求められます。移行が終わるまでメール配信を維持してください。旧インストール済みクライアントで Google OAuth を使っていた場合は、既存の `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、登録済みの `GOOGLE_REDIRECT_URI` も保持します。旧認証ルートのサーバーテレメトリーとクライアントの導入状況を確認してから `false` に設定し、API を再起動してください。無効化後の旧ルートは、古いクライアントに `404` ではなく `410 Gone` を返します。
 
 ## セッション有効期間
 
-ブラウザのログインは、デフォルトで 30 日間保持されます。`AUTH_TOKEN_TTL` で調整でき、Go duration または正の整数秒を受け付けます:
+ブラウザのログインはデフォルトで 30 日間保持されます。`AUTH_TOKEN_TTL` で調整でき、Go duration または正の整数秒を受け付けます:
 
 ```dotenv
 AUTH_TOKEN_TTL=720h
@@ -151,6 +108,6 @@ AUTH_TOKEN_TTL=720h
 
 ## 次のステップ
 
-- [環境変数](/environment-variables) — 変数の完全なリファレンス。
-- [認証とトークン](/auth-tokens) — ログインセッションとトークンの種類。
-- [メンバーとロール](/members-roles) — 招待とロール。
+- [環境変数](/environment-variables) - 変数の完全なリファレンス。
+- [認証とトークン](/auth-tokens) - ログインセッションとトークンの種類。
+- [メンバーとロール](/members-roles) - 招待とロール。

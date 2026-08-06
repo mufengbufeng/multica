@@ -7,11 +7,20 @@
 export function mapAuthError(err: unknown, fallback: string): string {
   if (!(err instanceof Error)) return fallback;
   const msg = err.message.toLowerCase();
-  if (/invalid|incorrect|wrong/.test(msg)) {
-    return "That code didn't match. Double-check and try again.";
+  if (/invalid email or password|incorrect password|wrong password/.test(msg)) {
+    return "Email or password is incorrect. Try again.";
   }
-  if (/expired/.test(msg)) {
-    return "That code has expired. Tap resend to get a new one.";
+  if (/already exists/.test(msg)) {
+    return "An account with this email already exists. Sign in instead.";
+  }
+  if (/valid email address/.test(msg)) {
+    return "Enter a valid email address.";
+  }
+  if (/password must be at least/.test(msg)) {
+    return "Use a password with at least 8 characters.";
+  }
+  if (/registration is disabled/.test(msg)) {
+    return "Account registration is disabled on this server.";
   }
   if (/rate.?limit|too many|throttle/.test(msg)) {
     return "Too many attempts. Wait a moment and try again.";

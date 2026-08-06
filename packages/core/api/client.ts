@@ -265,6 +265,8 @@ import {
   SubscribersListSchema,
   TimelineEntriesSchema,
   UserSchema,
+  LoginResponseSchema,
+  InvitationSchema,
   WebhookDeliveryResponseSchema,
   BillingBalanceSchema,
   BillingTransactionsPageSchema,
@@ -561,6 +563,42 @@ export class ApiClient {
   }
 
   // Auth
+  private async passwordAuth(
+    path: "/auth/login" | "/auth/register",
+    email: string,
+    password: string,
+  ): Promise<LoginResponse> {
+    const raw = await this.fetch<unknown>(path, {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    return this.parseLoginResponse(raw, `POST ${path}`);
+  }
+
+  private parseLoginResponse(raw: unknown, endpoint: string): LoginResponse {
+    const response = parseWithFallback<LoginResponse | null>(
+      raw,
+      LoginResponseSchema,
+      null,
+      { endpoint },
+    );
+    if (!response) {
+      throw new ApiError("Invalid authentication response", 502, "Bad Gateway");
+    }
+    return response;
+  }
+
+  async register(email: string, password: string): Promise<LoginResponse> {
+    return this.passwordAuth("/auth/register", email, password);
+  }
+
+  async login(email: string, password: string): Promise<LoginResponse> {
+    return this.passwordAuth("/auth/login", email, password);
+  }
+
+  // Deprecated installed-client compatibility methods. The server only
+  // authorizes pre-password accounts through these routes and operators can
+  // disable them after clients are upgraded.
   async sendCode(email: string): Promise<void> {
     await this.fetch("/auth/send-code", {
       method: "POST",
@@ -569,17 +607,27 @@ export class ApiClient {
   }
 
   async verifyCode(email: string, code: string): Promise<LoginResponse> {
-    return this.fetch("/auth/verify-code", {
+    const raw = await this.fetch<unknown>("/auth/verify-code", {
       method: "POST",
       body: JSON.stringify({ email, code }),
     });
+    return this.parseLoginResponse(raw, "POST /auth/verify-code");
   }
 
   async googleLogin(code: string, redirectUri: string): Promise<LoginResponse> {
-    return this.fetch("/auth/google", {
+    const raw = await this.fetch<unknown>("/auth/google", {
       method: "POST",
       body: JSON.stringify({ code, redirect_uri: redirectUri }),
     });
+    return this.parseLoginResponse(raw, "POST /auth/google");
+  }
+
+  async enrollPassword(password: string): Promise<LoginResponse> {
+    const raw = await this.fetch<unknown>("/api/me/password/enroll", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+    return this.parseLoginResponse(raw, "POST /api/me/password/enroll");
   }
 
   async logout(): Promise<void> {
@@ -2125,6 +2173,23 @@ export class ApiClient {
 
   async getInvitation(invitationId: string): Promise<Invitation> {
     return this.fetch(`/api/invitations/${invitationId}`);
+  }
+
+  async claimInvitation(invitationId: string, token: string): Promise<Invitation> {
+    const raw = await this.fetch<unknown>(`/api/invitations/${invitationId}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    const invitation = parseWithFallback<Invitation | null>(
+      raw,
+      InvitationSchema,
+      null,
+      { endpoint: "POST /api/invitations/{id}/claim" },
+    );
+    if (!invitation) {
+      throw new ApiError("Invalid invitation response", 502, "Bad Gateway");
+    }
+    return invitation;
   }
 
   async acceptInvitation(invitationId: string): Promise<MemberWithUser> {

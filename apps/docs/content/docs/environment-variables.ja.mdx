@@ -20,10 +20,10 @@ MULTICA_APP_URL=https://multica.example.com
 MULTICA_PUBLIC_URL=https://api.multica.example.com
 ```
 
-さらにメールサービスを 1 つ選ぶ必要があります。選ばない場合、認証コードと招待はサーバーログに書き込まれるだけです。
+パスワードによるログインにメール配信は不要です。ワークスペース招待と一時的な旧アカウント移行にはメール配信が必要です。招待リンクと認証コードは能力資格情報のため、サーバーログには書き込まれません。
 
 <Callout type="warning">
-プロダクションでデフォルトの `JWT_SECRET` を使わないでください。`MULTICA_DEV_VERIFICATION_CODE` も設定しないでください。
+プロダクションでデフォルトの `JWT_SECRET` を使わないでください。
 </Callout>
 
 ## API とデータベース
@@ -37,6 +37,7 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 | `JWT_SECRET` | 開発用の固定値 | ログイン JWT と一部の署名フローに使うシークレット |
 | `APP_ENV` | 空 | プロダクションでは `production` を設定 |
 | `AUTH_TOKEN_TTL` | `720h`（30 日） | ブラウザ JWT と cookie の有効期間。Go duration または正の整数秒を受け付けます |
+| `AUTH_LEGACY_AUTH_ENABLED` | `true` | パスワードのない既存アカウント向けに、旧インストール済みクライアントのメールコードと Google ルートを維持。移行後は `false` に設定 |
 | `LOG_LEVEL` | アプリのデフォルト | ログレベル |
 | `MULTICA_SHUTDOWN_HOLD_DURATION` | `0` | 終了シグナル受信後、グレースフルシャットダウンを開始するまでの待機時間 |
 
@@ -82,14 +83,9 @@ Kubernetes で shutdown hold を設定する場合、`terminationGracePeriodSeco
 | `SMTP_TLS` | `starttls` | `implicit`、`smtps`、`ssl` は暗黙的 TLS を意味します。465 では自動的に有効 |
 | `SMTP_TLS_INSECURE` | `false` | 証明書検証をスキップ。信頼できる内部ネットワーク専用 |
 | `SMTP_EHLO_NAME` | ホスト名 | 厳格な relay が要求する EHLO/FQDN |
-
-### Google OAuth
-
-| 変数 | デフォルト | 説明 |
-|---|---|---|
-| `GOOGLE_CLIENT_ID` | 空 | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | 空 | Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:3000/auth/callback` | Google Console のコールバックアドレスと完全に一致している必要があります |
+| `GOOGLE_CLIENT_ID` | 空 | 互換期間中に旧インストール済みクライアントが使う Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | 空 | 対応する Google OAuth client secret。デプロイ secret に保管 |
+| `GOOGLE_REDIRECT_URI` | 空 | 旧 Google OAuth クライアントに登録した正確な redirect URI |
 
 ### サインアップ範囲
 
@@ -99,7 +95,6 @@ Kubernetes で shutdown hold を設定する場合、`terminationGracePeriodSeco
 | `ALLOWED_EMAILS` | 空 | 登録を許可する完全なメールアドレス。カンマ区切り |
 | `ALLOWED_EMAIL_DOMAINS` | 空 | 登録を許可するメールドメイン。カンマ区切り |
 | `DISABLE_WORKSPACE_CREATION` | `false` | すべてのユーザーのワークスペース新規作成を禁止。owner/admin の例外はありません |
-| `MULTICA_DEV_VERIFICATION_CODE` | 空 | 非 production 環境で使う固定 6 桁のテスト認証コード |
 
 allowlist の正確な判定順序は[ログインとサインアップ](/auth-setup#サインアップ制限)を参照してください。
 
@@ -142,16 +137,18 @@ allowlist の正確な判定順序は[ログインとサインアップ](/auth-s
 
 | 変数 | デフォルト | 説明 |
 |---|---|---|
-| `REDIS_URL` | 空 | 認証レート制限、リアルタイムイベント、token cache に使用。未設定の場合、リアルタイムイベントはプロセス内メモリにフォールバックし、認証レート制限は無効になります |
+| `AUTH_PASSWORD_EMAIL_LIMIT` | `5` | 認証ウィンドウ内のメールアドレスごとの永続的な試行回数。PostgreSQL にハッシュで保存 |
+| `AUTH_PASSWORD_IP_LIMIT` | `20` | 認証ウィンドウ内のクライアント IP ごとの永続的な試行回数。PostgreSQL にハッシュで保存 |
+| `AUTH_PASSWORD_ATTEMPT_WINDOW` | `15m` | パスワードおよび旧認証の永続的なレート制限ウィンドウ |
+| `REDIS_URL` | 空 | 任意の認証バースト制限、リアルタイムイベント、token cache。未設定でも永続的な認証制限は有効 |
 | `REDIS_DISABLE_CLIENT_NAME` | `false` | マネージド Redis が `CLIENT SETNAME` を禁止している場合に `true` を設定 |
-| `RATE_LIMIT_AUTH` | `5` | 認証コード送信または Google ログイン開始の、IP あたり毎分の回数 |
-| `RATE_LIMIT_AUTH_VERIFY` | `20` | 認証コード検証の、IP あたり毎分の回数 |
+| `RATE_LIMIT_AUTH` | `5` | ログインまたは登録の、IP あたり毎分の回数 |
 | `RATE_LIMIT_TRUSTED_PROXIES` | 空 | `X-Forwarded-For` の提供を許可するプロキシ CIDR。カンマ区切り |
 | `MULTICA_TRUSTED_PROXIES` | 空 | オートパイロット webhook とリアルタイム接続が使う信頼済みプロキシ CIDR |
 
 リバースプロキシ配下のデプロイでは、実際のプロキシのネットワーク範囲を設定してください。すべての送信元を無条件に信頼してはいけません。クライアントが転送元 IP を偽装できてしまいます。
 
-上記の `RATE_LIMIT_*` は `REDIS_URL` を設定した場合にのみ有効です。未設定の場合、起動ログに rate limiting disabled と表示されます。Redis が一時的に利用できないときは、レート制限はリクエストを通す側に倒れ、通常のログインを妨げません。
+`RATE_LIMIT_*` は任意の Redis バースト制限だけを制御します。パスワードと旧認証は PostgreSQL の永続的なレート制限を独立して使い、そのクエリを実行できない場合は認証要求を拒否します。Redis が一時的に利用できない場合、バースト制限は通しますが、永続的な制限は有効なままです。
 
 ## 外部連携
 

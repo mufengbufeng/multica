@@ -250,6 +250,31 @@ func TestNewEmailService_FromEmailResolution(t *testing.T) {
 	}
 }
 
+func TestUnconfiguredEmailServiceRejectsCredentialDelivery(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "")
+	s := &EmailService{}
+	if s.CanDeliver() {
+		t.Fatal("empty email service must not report a delivery transport")
+	}
+	if err := s.SendLegacyVerificationCode("user@example.com", "123456"); err == nil {
+		t.Fatal("legacy code delivery without a transport must fail")
+	}
+	if err := s.SendInvitationEmail("user@example.com", "Inviter", "Workspace", "id", "capability-token"); err == nil {
+		t.Fatal("invitation delivery without a transport must fail")
+	}
+
+	if !(&EmailService{smtpHost: "smtp.example.com"}).CanDeliver() {
+		t.Fatal("configured SMTP transport must report delivery availability")
+	}
+	if (&EmailService{smtpHost: "smtp.example.com"}).CanDeliverInvitations() {
+		t.Fatal("invitation delivery must require a configured frontend origin")
+	}
+	t.Setenv("FRONTEND_ORIGIN", "https://app.example.com/")
+	if !(&EmailService{smtpHost: "smtp.example.com"}).CanDeliverInvitations() {
+		t.Fatal("configured SMTP transport and frontend origin must allow invitations")
+	}
+}
+
 func TestSendSMTPRequiresConfiguredFromEmail(t *testing.T) {
 	s := &EmailService{
 		smtpHost:     "127.0.0.1",

@@ -120,7 +120,7 @@ describe("browser runtime URLs", () => {
 describe("runtimeRewriteDestination", () => {
   it("keeps same-origin fallback when no runtime upstreams are configured", () => {
     expect(runtimeRewriteDestination("/api/config", {})).toBeUndefined();
-    expect(runtimeRewriteDestination("/auth/send-code", {})).toBeUndefined();
+    expect(runtimeRewriteDestination("/auth/login", {})).toBeUndefined();
     expect(
       runtimeRewriteDestination("/uploads/workspaces/a.png", {}),
     ).toBeUndefined();
@@ -151,22 +151,15 @@ describe("runtimeRewriteDestination", () => {
       }),
     ).toBe("http://backend:8080/api/config");
     expect(
-      runtimeRewriteDestination("/auth/send-code", {
+      runtimeRewriteDestination("/auth/login", {
         REMOTE_API_URL: "http://backend:8080",
       }),
-    ).toBe("http://backend:8080/auth/send-code");
+    ).toBe("http://backend:8080/auth/login");
     expect(
       runtimeRewriteDestination("/uploads/workspaces/a.png", {
         REMOTE_API_URL: "http://backend:8080",
       }),
     ).toBe("http://backend:8080/uploads/workspaces/a.png");
-  });
-
-  it("does not rewrite frontend auth callback pages", () => {
-    expect(runtimeRewriteDestination("/auth/callback", {})).toBeUndefined();
-    expect(
-      runtimeRewriteDestination("/auth/hg-sso/callback", {}),
-    ).toBeUndefined();
   });
 
   it("maps docs paths to the runtime docs origin", () => {

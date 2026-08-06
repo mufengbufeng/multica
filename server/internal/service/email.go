@@ -9,6 +9,7 @@ import (
 	"mime/quotedprintable"
 	"net"
 	"net/smtp"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -234,7 +235,7 @@ func NewEmailService() *EmailService {
 	case client != nil:
 		fmt.Printf("EmailService: Resend API from=%s\n", from)
 	default:
-		fmt.Println("EmailService: DEV mode — codes printed to stdout (set MULTICA_DEV_VERIFICATION_CODE in .env for a fixed local code)")
+		fmt.Println("EmailService: email delivery is not configured")
 	}
 
 	return &EmailService{
@@ -248,6 +249,30 @@ func NewEmailService() *EmailService {
 		smtpTLSImplicit: smtpTLSImplicit,
 		smtpEHLOName:    smtpEHLOName,
 	}
+}
+
+// CanDeliver reports whether this process has a configured email transport.
+// Invitation links and legacy login codes are bearer credentials, so they are
+// never printed to logs as a fallback delivery mechanism.
+func (s *EmailService) CanDeliver() bool {
+	return s != nil && (s.smtpHost != "" || s.client != nil)
+}
+
+// CanDeliverInvitations also requires a valid frontend origin. An invitation
+// URL carries a bearer capability, so it must never fall back to a different
+// deployment when the operator has not configured this instance's address.
+func (s *EmailService) CanDeliverInvitations() bool {
+	_, ok := invitationOrigin()
+	return s.CanDeliver() && ok
+}
+
+func invitationOrigin() (string, bool) {
+	origin := strings.TrimRight(strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN")), "/")
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", false
+	}
+	return origin, true
 }
 
 // sendSMTP delivers an HTML email via an SMTP server.
@@ -334,10 +359,10 @@ func (s *EmailService) sendSMTP(to, subject, htmlBody string) error {
 	return c.Quit()
 }
 
-// SendVerificationCode sends a one-time login code. The code is server-generated
-// (6-digit numeric) so no user-controlled text reaches the email body here.
-// Delivery priority: SMTP relay → Resend API → DEV stdout.
-func (s *EmailService) SendVerificationCode(to, code string) error {
+// SendLegacyVerificationCode delivers a code for a pre-password account while
+// the installed-client compatibility window is enabled. New authentication
+// flows must use passwords and never call this method.
+func (s *EmailService) SendLegacyVerificationCode(to, code string) error {
 	body := fmt.Sprintf(
 		`<div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
 			<h2>Your verification code</h2>
@@ -345,40 +370,37 @@ func (s *EmailService) SendVerificationCode(to, code string) error {
 			<p>This code expires in 10 minutes.</p>
 			<p style="color: #666; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
 		</div>`, code)
-
 	if s.smtpHost != "" {
 		return s.sendSMTP(to, "Your Multica verification code", body)
 	}
 	if s.client == nil {
-		fmt.Printf("[DEV] Verification code for %s: %s\n", to, code)
-		return nil
+		return fmt.Errorf("email delivery is not configured")
 	}
-	params := &resend.SendEmailRequest{
+	_, err := s.client.Emails.Send(&resend.SendEmailRequest{
 		From:    s.fromEmail,
 		To:      []string{to},
 		Subject: "Your Multica verification code",
 		Html:    body,
-	}
-	_, err := s.client.Emails.Send(params)
+	})
 	return err
 }
 
 // SendInvitationEmail notifies the invitee that they have been invited to a workspace.
-// invitationID is included in the URL so the email deep-links to /invite/{id}.
-func (s *EmailService) SendInvitationEmail(to, inviterName, workspaceName, invitationID string) error {
-	appURL := strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
-	if appURL == "" {
-		appURL = "https://multica.ai"
+// The capability token stays in the fragment so it is not sent to servers,
+// proxies, or referrer logs when the browser opens the invitation page.
+func (s *EmailService) SendInvitationEmail(to, inviterName, workspaceName, invitationID, invitationToken string) error {
+	appURL, ok := invitationOrigin()
+	if !ok {
+		return fmt.Errorf("FRONTEND_ORIGIN must be an absolute http(s) URL for invitation delivery")
 	}
-	inviteURL := fmt.Sprintf("%s/invite/%s", appURL, invitationID)
+	inviteURL := fmt.Sprintf("%s/invite/%s#token=%s", appURL, invitationID, invitationToken)
 
 	if s.smtpHost != "" {
 		params := buildInvitationParams(s.fromEmail, to, inviterName, workspaceName, inviteURL)
 		return s.sendSMTP(to, params.Subject, params.Html)
 	}
 	if s.client == nil {
-		fmt.Printf("[DEV] Invitation email to %s: %s invited you to %s — %s\n", to, inviterName, workspaceName, inviteURL)
-		return nil
+		return fmt.Errorf("email delivery is not configured")
 	}
 	params := buildInvitationParams(s.fromEmail, to, inviterName, workspaceName, inviteURL)
 	_, err := s.client.Emails.Send(params)

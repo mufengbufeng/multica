@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -58,10 +59,32 @@ type dbExecutor interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// emailDelivery is deliberately narrow: authentication and invitations only
+// need to know whether a bearer credential can be delivered and how to send
+// it. Keeping this boundary small also lets handler tests verify capability
+// flows without dialing a real SMTP or Resend service.
+type emailDelivery interface {
+	CanDeliver() bool
+	CanDeliverInvitations() bool
+	SendLegacyVerificationCode(to, code string) error
+	SendInvitationEmail(to, inviterName, workspaceName, invitationID, invitationToken string) error
+}
+
 type Config struct {
 	AllowSignup         bool
 	AllowedEmails       []string
 	AllowedEmailDomains []string
+	// LegacyAuthEnabled keeps the pre-password OTP and Google routes available
+	// for installed clients and existing passwordless accounts during a
+	// controlled migration window. It is deliberately separate from signup:
+	// legacy routes never create accounts.
+	LegacyAuthEnabled bool
+	// AuthPassword* configure the durable database-backed guard on public auth
+	// endpoints. Redis remains an optional burst limiter, but these limits are
+	// always enforced so the default self-hosted deployment is protected too.
+	AuthPasswordEmailLimit    int
+	AuthPasswordIPLimit       int
+	AuthPasswordAttemptWindow time.Duration
 	// DisableWorkspaceCreation, when true, makes POST /api/workspaces return
 	// 403 for every caller. There is no role/owner exception because the repo
 	// has no platform-admin concept; operators bootstrap the workspace with
@@ -97,6 +120,11 @@ type Config struct {
 	// webhook limiter from being bypassed by a spoofed XFF on deployments
 	// without a header-stripping reverse proxy in front.
 	TrustedProxies []netip.Prefix
+	// AuthTrustedProxies are the reverse-proxy CIDRs trusted by the public
+	// authentication limiters. Keep this separate from TrustedProxies so an
+	// operator can scope forwarding-header trust for auth independently from
+	// webhook and realtime traffic.
+	AuthTrustedProxies []netip.Prefix
 	// CloudRuntimeFleetURL enables the SaaS-only remote Fleet adapter when set.
 	// Empty keeps self-hosted deployments explicit: cloud runtime endpoints
 	// return 503 instead of attempting to dial a hard-coded private service.
@@ -162,7 +190,7 @@ type Handler struct {
 	TaskService            *service.TaskService
 	IssueService           *service.IssueService
 	AutopilotService       *service.AutopilotService
-	EmailService           *service.EmailService
+	EmailService           emailDelivery
 	UpdateStore            UpdateStore
 	ModelListStore         ModelListStore
 	LocalSkillListStore    LocalSkillListStore
@@ -280,10 +308,15 @@ type Handler struct {
 	// so the feature degrades cleanly on deployments without a private key.
 	// Wired in cmd/server/router.go after New.
 	PRRefresh *ghsnapshot.Manager
-	cfg       Config
+	// Auth-rate-limit cleanup is intentionally process-local coordination. Each
+	// replica can safely prune old durable rows; this only avoids repeating the
+	// same indexed DELETE on every request within a replica.
+	authRateLimitCleanupMu   sync.Mutex
+	nextAuthRateLimitCleanup time.Time
+	cfg                      Config
 }
 
-func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
+func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService emailDelivery, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
 	var executor dbExecutor
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
@@ -301,6 +334,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	if cfg.AttachmentDownloadURLTTL <= 0 {
 		cfg.AttachmentDownloadURLTTL = defaultAttachmentDownloadURLTTL
 	}
+	normalizeAuthRateLimitConfig(&cfg)
 
 	var daemonHub *daemonws.Hub
 	if len(daemonHubs) > 0 {

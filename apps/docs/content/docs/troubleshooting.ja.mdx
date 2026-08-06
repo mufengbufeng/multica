@@ -114,24 +114,20 @@ docker compose -f docker-compose.selfhost.yml up -d
 
 完全なリバースプロキシの例は[セルフホストクイックスタート](/self-host-quickstart#3-アクセス方法を選ぶ)を参照してください。
 
-## 認証コードや招待メールが届かない
+## 招待メールが届かない
 
-まず backend の起動ログを確認します。ログには、現在使っているのが `SMTP relay`、`Resend API`、`DEV mode` のどれかが表示されます:
+まず backend の起動ログを確認します。ログには、現在 `SMTP relay`、`Resend API` を使っているか、メール配信が無効かが表示されます:
 
 ```bash
 docker compose -f docker-compose.selfhost.yml logs backend \
   | grep "EmailService:"
 ```
 
-- **DEV mode**: メールは送信されず、認証コードと招待リンクは backend ログに書き込まれるだけです。
+- **メール配信無効**: メールは送信されず、backend は招待リンクをログに書き込む代わりに新しい招待を拒否します。
 - **Resend**: API key が有効で、送信元アドレスのドメインが検証済みであることを確認します。
 - **SMTP**: ホスト、ポート、資格情報、送信元アドレスを確認し、エラーログから失敗が接続、TLS、認証、配送のどの段階で起きたかを判断します。
 
-`SMTP_HOST` と Resend が両方設定されている場合、Multica は SMTP を優先します。設定方法は[ログインとサインアップ](/auth-setup#メール認証コード)を参照してください。
-
-<Callout type="warning">
-プロダクションではログ内の認証コードに依存せず、固定のローカルテスト認証コードも有効にしないでください。
-</Callout>
+`SMTP_HOST` と Resend が両方設定されている場合、Multica は SMTP を優先します。設定方法は[ログインとサインアップ](/auth-setup#招待メールの配信)を参照してください。
 
 ## 添付ファイルのアップロードやダウンロードが失敗する
 

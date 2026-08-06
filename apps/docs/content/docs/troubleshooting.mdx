@@ -114,24 +114,20 @@ docker compose -f docker-compose.selfhost.yml up -d
 
 For a complete reverse-proxy example, see the [self-host quickstart](/self-host-quickstart#3-choose-how-to-access).
 
-## Verification code and invitation emails not delivered
+## Invitation emails not delivered
 
-Check the backend startup log first. It states whether the server is using `SMTP relay`, `Resend API`, or `DEV mode`:
+Check the backend startup log first. It states whether the server is using `SMTP relay`, `Resend API`, or has email delivery disabled:
 
 ```bash
 docker compose -f docker-compose.selfhost.yml logs backend \
   | grep "EmailService:"
 ```
 
-- **DEV mode**: no email is sent; verification codes and invitation links are only written to the backend log.
+- **Email delivery disabled**: no email is sent, and the backend rejects new invitations rather than writing invitation links to logs.
 - **Resend**: confirm the API key is valid and the sender address's domain is verified.
 - **SMTP**: confirm the host, port, credentials, and sender address, and use the error log to tell whether the failure happened at the connection, TLS, authentication, or delivery stage.
 
-When `SMTP_HOST` and Resend are both configured, Multica prefers SMTP. For configuration, see [Sign-in and signup](/auth-setup#email-verification-codes).
-
-<Callout type="warning">
-Do not rely on codes in the log in production, and do not enable the fixed local test code.
-</Callout>
+When `SMTP_HOST` and Resend are both configured, Multica prefers SMTP. For configuration, see [Sign-in and signup](/auth-setup#email-delivery-for-invitations).
 
 ## Attachment uploads or downloads fail
 

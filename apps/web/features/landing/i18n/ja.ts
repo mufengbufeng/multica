@@ -133,13 +133,13 @@ export function createJaDict(allowSignup: boolean): LandingDict {
             ? "登録してワークスペースを作成"
             : "ワークスペースにログイン",
           description: allowSignup
-            ? "メールアドレスを入力し、認証コードで確認すれば完了です。ワークスペースは自動的に作成され、セットアップウィザードも設定フォームもありません。"
-            : "メールアドレスを入力し、認証コードで確認すれば、そのままワークスペースにログインできます。セットアップウィザードも設定フォームもありません。",
+            ? "メールアドレスとパスワードで登録すれば完了です。ワークスペースは自動的に作成され、セットアップウィザードも設定フォームもありません。"
+            : "メールアドレスとパスワードで、そのままワークスペースにログインできます。セットアップウィザードも設定フォームもありません。",
         },
         {
           title: "CLI をインストールしてマシンを接続",
           description:
-            "multica setup を実行すると、OAuth の手順を案内し、デーモンを起動し、15種類の対応コーディングツール(Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI)をスキャンします。すでにインストール済みのものは、自動的にランタイムとして登録されます。",
+            "multica setup を実行すると、ブラウザでのログインを開き、デーモンを起動し、15種類の対応コーディングツール(Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI)をスキャンします。すでにインストール済みのものは、自動的にランタイムとして登録されます。",
         },
         {
           title: "最初のエージェントを作成",

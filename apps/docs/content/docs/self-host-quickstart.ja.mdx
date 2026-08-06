@@ -144,26 +144,9 @@ curl -fsS https://api.example.com/readyz
 
 ## 4. ログインしてワークスペースを作成する
 
-ローカルの `http://localhost:3000`、または先ほど設定した `https://app.example.com` を開き、メールアドレスを入力して認証コードをリクエストします。
+ローカルの `http://localhost:3000`、または先ほど設定した `https://app.example.com` を開き、メールアドレスとパスワードでアカウントを作成してから最初のワークスペースを作成します。
 
-デフォルトではメールサービスは設定されていません。コードをリクエストしたら、backend のログから読み取ります。
-
-```bash
-docker compose -f docker-compose.selfhost.yml logs backend \
-  | grep "Verification code"
-```
-
-ログには次のような行が出力されます。
-
-```text
-[DEV] Verification code for you@example.com: 123456
-```
-
-コードを入力して、最初のワークスペースを作成します。Resend または SMTP を設定すると認証コードはメールで送信され、メンバーがコンテナログを読む必要はなくなります。詳しくは[ログインとサインアップ設定](/auth-setup)を参照してください。
-
-<Callout type="warning">
-セルフホストのデプロイはデフォルトで `APP_ENV=production` を使い、固定の認証コードは有効になりません。公開インスタンスで `MULTICA_DEV_VERIFICATION_CODE` を設定しないでください。
-</Callout>
+登録とログインにメールサービスは不要です。ワークスペース招待をメールで届けるには Resend または SMTP を設定してください。未設定時は新しい招待が拒否され、招待リンクが backend のログに書き込まれることはありません。詳しくは[ログインとサインアップ設定](/auth-setup)を参照してください。
 
 ## 5. 実行用コンピュータを接続する
 
@@ -333,7 +316,7 @@ Helm には独自のアップグレード経路があります。values ファ�
 | 症状 | まず確認すること |
 |---|---|
 | `/readyz` が `ok` を返さない | `docker compose -f docker-compose.selfhost.yml logs backend postgres` を実行する。 |
-| 認証コードが届かない | コードを一度リクエストし、backend のログで `Verification code` を探す。 |
+| ログインできない | メールアドレスとパスワードを確認し、登録が制限されている場合は allowlist も確認する。 |
 | `setup self-host` が server に到達できないと報告する | 実行用コンピュータから `https://api.example.com/health` をリクエストし、DNS、TLS、リバースプロキシがすべて到達可能か確認する。 |
 | デーモンが `Agents` を表示しない | AI コーディングツールが `PATH` にありログイン済みであることを確認し、`multica daemon restart` を実行する。 |
 | イシューがキューにとどまり続ける | `multica daemon status` を実行し、デーモンが起動していてワークスペースに接続していることを確認する。 |
@@ -342,7 +325,7 @@ Helm には独自のアップグレード経路があります。values ファ�
 
 ## 次のステップ
 
-- [ログインとサインアップ設定](/auth-setup) — メール、Google ログイン、サインアップ範囲を設定する。
+- [ログインとサインアップ設定](/auth-setup) — 招待メールとサインアップ範囲を設定する。
 - [環境変数](/environment-variables) — サーバー設定の完全なリファレンス。
 - [Self-hosting guide](https://github.com/multica-ai/multica/blob/main/SELF_HOSTING.md) — Kubernetes、アップグレード、手動デプロイ。
 - [デスクトップアプリ](/desktop-app) — デスクトップアプリをセルフホストのサービスに接続する。

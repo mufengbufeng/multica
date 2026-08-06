@@ -1,3 +1,6 @@
+-- Legacy email-code compatibility queries. New accounts use passwords; these
+-- rows authenticate only pre-migration accounts while compatibility is enabled.
+
 -- name: CreateVerificationCode :one
 INSERT INTO verification_code (email, code, expires_at)
 VALUES ($1, $2, $3)

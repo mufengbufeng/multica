@@ -128,15 +128,15 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     headlineFaded: "in the next hour.",
     steps: [
       {
-        title: allowSignup ? "Sign up & create your workspace" : "Login to your workspace",
+        title: allowSignup ? "Sign up & create your workspace" : "Sign in to your workspace",
         description: allowSignup
-          ? "Enter your email, verify with a code, and you\u2019re in. Your workspace is created automatically \u2014 no setup wizard, no configuration forms."
-          : "Enter your email, verify with a code, and you\u2019re logged into your workspace \u2014 no setup wizard, no configuration forms.",
+          ? "Create an account with your email and password. Your workspace is created automatically \u2014 no setup wizard, no configuration forms."
+          : "Sign in with your email and password \u2014 no setup wizard, no configuration forms.",
       },
       {
         title: "Install the CLI & connect your machine",
         description:
-          "Run multica setup \u2014 it walks you through OAuth, starts the daemon, and scans for the 15 supported coding tools (Antigravity, Claude Code, CodeBuddy, Codex, Cursor, Copilot, Hermes, Kimi, Reasonix, Kiro CLI, OpenCode, OpenClaw, Pi, Qoder, Trae CLI). Whichever ones you already have installed get registered as runtimes automatically.",
+          "Run multica setup \u2014 it opens browser sign-in, starts the daemon, and scans for the 15 supported coding tools (Antigravity, Claude Code, CodeBuddy, Codex, Cursor, Copilot, Hermes, Kimi, Reasonix, Kiro CLI, OpenCode, OpenClaw, Pi, Qoder, Trae CLI). Whichever ones you already have installed get registered as runtimes automatically.",
       },
       {
         title: "Create your first agent",

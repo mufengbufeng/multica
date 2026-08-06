@@ -189,17 +189,16 @@ describe("proxy runtime upstream rewrites", () => {
     }
   });
 
-  it("does not rewrite frontend auth callback pages", () => {
+  it("rewrites removed auth callback paths to the runtime API origin", () => {
     const previous = process.env.REMOTE_API_URL;
     process.env.REMOTE_API_URL = "http://backend:8080";
     try {
       const res = proxy(makeRequest("/auth/callback"));
 
       expect(res.status).toBe(200);
-      expect(res.headers.get("x-middleware-rewrite")).toBeNull();
-      expect(
-        res.headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
-      ).toBe("en");
+      expect(res.headers.get("x-middleware-rewrite")).toBe(
+        "http://backend:8080/auth/callback",
+      );
     } finally {
       restoreEnv("REMOTE_API_URL", previous);
     }

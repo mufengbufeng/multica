@@ -130,13 +130,13 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         title: allowSignup ? "注册并创建您的工作空间" : "登录到您的工作空间",
         description: allowSignup
-          ? "输入您的邮箱，验证代码后即可使用。工作空间会自动创建——无需设置向导或配置表单。"
-          : "输入您的邮箱，验证代码后即可登录到您的工作空间——无需设置向导或配置表单。",
+          ? "使用邮箱和密码创建账号即可开始。工作空间会自动创建——无需设置向导或配置表单。"
+          : "使用邮箱和密码登录到您的工作空间——无需设置向导或配置表单。",
       },
       {
         title: "\u5b89\u88c5 CLI \u5e76\u8fde\u63a5\u4f60\u7684\u673a\u5668",
         description:
-          "运行 multica setup——它会引导你完成 OAuth 登录、启动守护进程、并扫描 15 款支持的 AI 编程工具（Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI）。本机已安装的工具会被自动注册成运行时。",
+          "运行 multica setup——它会打开浏览器完成登录、启动守护进程、并扫描 15 款支持的 AI 编程工具（Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI）。本机已安装的工具会被自动注册成运行时。",
       },
       {
         title: "\u521b\u5efa\u4f60\u7684\u7b2c\u4e00\u4e2a 智能体",

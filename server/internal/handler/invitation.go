@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -49,6 +52,14 @@ func invitationToResponse(inv db.WorkspaceInvitation) InvitationResponse {
 	}
 }
 
+func newInvitationToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
 // ---------------------------------------------------------------------------
 // CreateInvitation replaces the old "instant-add" CreateMember flow.
 // POST /api/workspaces/{id}/members  (same endpoint, new behaviour)
@@ -58,6 +69,10 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 	requester, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
+		return
+	}
+	if h.EmailService == nil || !h.EmailService.CanDeliverInvitations() {
+		writeError(w, http.StatusServiceUnavailable, "email delivery and FRONTEND_ORIGIN are required to send invitations")
 		return
 	}
 
@@ -83,9 +98,9 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if the user is already a member.
-	existingUser, err := h.Queries.GetUserByEmail(r.Context(), email)
-	if err == nil {
+	// Check if the user is already a member. This is only a delivery/UX check;
+	// an invitation is never pre-bound based on a claimed email address.
+	if existingUser, err := h.Queries.GetUserByEmail(r.Context(), email); err == nil {
 		_, memberErr := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
 			UserID:      existingUser.ID,
 			WorkspaceID: requester.WorkspaceID,
@@ -94,6 +109,9 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "user is already a member")
 			return
 		}
+	} else if !isNotFound(err) {
+		writeError(w, http.StatusInternalServerError, "failed to lookup user")
+		return
 	}
 
 	// Drop any past-due pending invitations to 'expired' first. The partial unique
@@ -109,7 +127,7 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if there is still a live pending invitation.
-	_, err = h.Queries.GetPendingInvitationByEmail(r.Context(), db.GetPendingInvitationByEmailParams{
+	_, err := h.Queries.GetPendingInvitationByEmail(r.Context(), db.GetPendingInvitationByEmailParams{
 		WorkspaceID:  requester.WorkspaceID,
 		InviteeEmail: email,
 	})
@@ -117,19 +135,29 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "invitation already pending for this email")
 		return
 	}
+	if !isNotFound(err) {
+		writeError(w, http.StatusInternalServerError, "failed to create invitation")
+		return
+	}
+	ws, err := h.Queries.GetWorkspace(r.Context(), requester.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load workspace")
+		return
+	}
+	workspaceName := ws.Name
 
-	// Resolve invitee_user_id if the user already exists.
-	var inviteeUserID pgtype.UUID
-	if existingUser.ID.Valid {
-		inviteeUserID = existingUser.ID
+	token, err := newInvitationToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to secure invitation")
+		return
 	}
 
 	inv, err := h.Queries.CreateInvitation(r.Context(), db.CreateInvitationParams{
-		WorkspaceID:   requester.WorkspaceID,
-		InviterID:     requester.UserID,
-		InviteeEmail:  email,
-		InviteeUserID: inviteeUserID,
-		Role:          role,
+		WorkspaceID:  requester.WorkspaceID,
+		InviterID:    requester.UserID,
+		InviteeEmail: email,
+		TokenHash:    pgtype.Text{String: auth.HashToken(token), Valid: true},
+		Role:         role,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -148,11 +176,7 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	// Notify the invitee in real time if they are a registered user.
 	userID := requestUserID(r)
 	eventPayload := map[string]any{"invitation": resp}
-	var workspaceName string
-	if ws, err := h.Queries.GetWorkspace(r.Context(), requester.WorkspaceID); err == nil {
-		workspaceName = ws.Name
-		eventPayload["workspace_name"] = ws.Name
-	}
+	eventPayload["workspace_name"] = workspaceName
 	h.publish(protocol.EventInvitationCreated, uuidToString(requester.WorkspaceID), "member", userID, eventPayload)
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.TeamInviteSent(
@@ -162,19 +186,19 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 		"email",
 	))
 
-	// Send invitation email (fire-and-forget).
-	if h.EmailService != nil && workspaceName != "" {
-		inviterName := email // fallback
-		if inviter, err := h.Queries.GetUser(r.Context(), requester.UserID); err == nil {
-			inviterName = inviter.Name
-		}
-		invID := uuidToString(inv.ID)
-		go func() {
-			if err := h.EmailService.SendInvitationEmail(email, inviterName, workspaceName, invID); err != nil {
-				slog.Warn("failed to send invitation email", "email", email, "error", err)
-			}
-		}()
+	// Send invitation email (fire-and-forget). A configured transport is
+	// required above; delivery failures remain observable for operators.
+	inviterName := email // fallback
+	if inviter, err := h.Queries.GetUser(r.Context(), requester.UserID); err == nil {
+		inviterName = inviter.Name
 	}
+	invID := uuidToString(inv.ID)
+	emailService := h.EmailService
+	go func() {
+		if err := emailService.SendInvitationEmail(email, inviterName, workspaceName, invID, token); err != nil {
+			slog.Warn("failed to send invitation email", "email", email, "error", err)
+		}
+	}()
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -259,6 +283,58 @@ func (h *Handler) RevokeInvitation(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// ClaimInvitation binds an emailed invitation capability to the authenticated
+// user. Email is delivery metadata only; every subsequent invitation action is
+// authorized by this durable user binding.
+// POST /api/invitations/{id}/claim
+// ---------------------------------------------------------------------------
+
+type ClaimInvitationRequest struct {
+	Token string `json:"token"`
+}
+
+func (h *Handler) ClaimInvitation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	invitationID := chi.URLParam(r, "id")
+	invitationUUID, ok := parseUUIDOrBadRequest(w, invitationID, "invitation id")
+	if !ok {
+		return
+	}
+	var req ClaimInvitationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	token := strings.TrimSpace(req.Token)
+	if len(token) < 40 || len(token) > 128 {
+		writeError(w, http.StatusNotFound, "invitation not found or unavailable")
+		return
+	}
+
+	inv, err := h.Queries.ClaimInvitation(r.Context(), db.ClaimInvitationParams{
+		ID:            invitationUUID,
+		TokenHash:     pgtype.Text{String: auth.HashToken(token), Valid: true},
+		InviteeUserID: parseUUID(userID),
+	})
+	if isNotFound(err) {
+		// Keep invalid tokens, expired invitations, and invitations claimed by a
+		// different user indistinguishable to callers.
+		writeError(w, http.StatusNotFound, "invitation not found or unavailable")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to claim invitation")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, invitationToResponse(inv))
+}
+
+// ---------------------------------------------------------------------------
 // GetMyInvitation — get a single invitation by ID (for the invite accept page).
 // GET /api/invitations/{id}
 // ---------------------------------------------------------------------------
@@ -280,13 +356,7 @@ func (h *Handler) GetMyInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the invitation belongs to the current user.
-	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-	if strings.ToLower(user.Email) != inv.InviteeEmail && uuidToString(inv.InviteeUserID) != userID {
+	if uuidToString(inv.InviteeUserID) != userID {
 		writeError(w, http.StatusForbidden, "invitation does not belong to you")
 		return
 	}
@@ -316,16 +386,7 @@ func (h *Handler) ListMyInvitations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-
-	rows, err := h.Queries.ListPendingInvitationsForUser(r.Context(), db.ListPendingInvitationsForUserParams{
-		InviteeUserID: user.ID,
-		InviteeEmail:  user.Email,
-	})
+	rows, err := h.Queries.ListPendingInvitationsForUser(r.Context(), parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list invitations")
 		return
@@ -375,13 +436,10 @@ func (h *Handler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the invitation belongs to the current user.
-	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-	if strings.ToLower(user.Email) != inv.InviteeEmail && uuidToString(inv.InviteeUserID) != userID {
+	// A capability-token claim is the only path that binds an invitation to a
+	// user. Never fall back to email equality here: public signup does not prove
+	// control of the claimed address.
+	if uuidToString(inv.InviteeUserID) != userID {
 		writeError(w, http.StatusForbidden, "invitation does not belong to you")
 		return
 	}
@@ -396,6 +454,11 @@ func (h *Handler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGone, "invitation has expired")
 		return
 	}
+	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
 
 	// Use a transaction: mark accepted + create member atomically.
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -407,7 +470,14 @@ func (h *Handler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.Queries.WithTx(tx)
 
-	accepted, err := qtx.AcceptInvitation(r.Context(), inv.ID)
+	accepted, err := qtx.AcceptInvitation(r.Context(), db.AcceptInvitationParams{
+		ID:            inv.ID,
+		InviteeUserID: user.ID,
+	})
+	if isNotFound(err) {
+		writeError(w, http.StatusConflict, "invitation is no longer available")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to accept invitation")
 		return
@@ -518,13 +588,7 @@ func (h *Handler) DeclineInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the invitation belongs to the current user.
-	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-	if strings.ToLower(user.Email) != inv.InviteeEmail && uuidToString(inv.InviteeUserID) != userID {
+	if uuidToString(inv.InviteeUserID) != userID {
 		writeError(w, http.StatusForbidden, "invitation does not belong to you")
 		return
 	}
@@ -534,7 +598,14 @@ func (h *Handler) DeclineInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	declined, err := h.Queries.DeclineInvitation(r.Context(), inv.ID)
+	declined, err := h.Queries.DeclineInvitation(r.Context(), db.DeclineInvitationParams{
+		ID:            inv.ID,
+		InviteeUserID: parseUUID(userID),
+	})
+	if isNotFound(err) {
+		writeError(w, http.StatusConflict, "invitation is no longer available")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to decline invitation")
 		return

@@ -4,7 +4,6 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
-import { useConfigStore } from "@multica/core/config";
 import {
   workspaceKeys,
   workspaceListOptions,
@@ -60,7 +59,6 @@ function LoginPageContent() {
   const router = useRouter();
   const qc = useQueryClient();
   const { t } = useT("auth");
-  const googleClientId = useConfigStore((state) => state.googleClientId);
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
   const searchParams = useSearchParams();
@@ -95,6 +93,7 @@ function LoginPageContent() {
       return;
     }
     if (cliCallbackRaw) return;
+    if (settledLoggedOutRef.current) return;
     if (isDesktopHandoff) {
       // Desktop opened the browser for login but the web session is already
       // authenticated — mint a bearer token from the cookie session and hand
@@ -114,12 +113,10 @@ function LoginPageContent() {
         });
       return;
     }
-    // Fresh form login (issue #5009): `user` was written by verifyCode while
-    // handleVerify was still fetching the workspace list, so this effect used
-    // to read the not-yet-seeded list cache and race handleSuccess with a
-    // replace to /workspaces/new. handleSuccess owns post-login navigation;
-    // this effect only serves visitors who arrived already authenticated.
-    if (settledLoggedOutRef.current) return;
+    // Fresh credential login: `user` is written while the shared form is
+    // still fetching the workspace list, so this effect must not race the
+    // form-owned post-login navigation.
+    // This effect only serves visitors who arrived already authenticated.
     if (nextUrl) {
       router.replace(nextUrl);
       return;
@@ -134,9 +131,33 @@ function LoginPageContent() {
       .catch(() => [] as Workspace[])
       .then((list) => resolveLoggedInDestination(qc, hasOnboarded, list))
       .then((dest) => router.replace(dest));
-  }, [isLoading, user, router, nextUrl, cliCallbackRaw, isDesktopHandoff, hasOnboarded, qc]);
+  }, [
+    isLoading,
+    user,
+    router,
+    nextUrl,
+    cliCallbackRaw,
+    isDesktopHandoff,
+    hasOnboarded,
+    qc,
+    t,
+  ]);
 
   const handleSuccess = async () => {
+    if (isDesktopHandoff) {
+      try {
+        const { token } = await api.issueCliToken();
+        setDesktopToken(token);
+        window.location.href = `multica://auth/callback?token=${encodeURIComponent(token)}`;
+      } catch (err) {
+        setDesktopError(
+          err instanceof Error
+            ? err.message
+            : t(($) => $.web.desktop_handoff.prepare_failed),
+        );
+      }
+      return;
+    }
     // Read the latest user snapshot directly — the closure's `hasOnboarded`
     // was captured before login completed and would be stale here.
     const currentUser = useAuthStore.getState().user;
@@ -148,22 +169,6 @@ function LoginPageContent() {
     const list = qc.getQueryData<Workspace[]>(workspaceKeys.list()) ?? [];
     router.push(await resolveLoggedInDestination(qc, onboarded, list));
   };
-
-  // Build Google OAuth state: encode platform, next URL, and CLI callback
-  // params so the callback can redirect to the right place after login.
-  // CLI callback/state must survive the Google OAuth round-trip so the
-  // post-login callback page can redirect the JWT back to the CLI's local
-  // HTTP listener (critical for headless / WSL2 environments).
-  const googleState = [
-    platform === "desktop" ? "platform:desktop" : "",
-    nextUrl ? `next:${nextUrl}` : "",
-    cliCallbackRaw && validateCliCallback(cliCallbackRaw)
-      ? `cli_callback:${encodeURIComponent(cliCallbackRaw)}`
-      : "",
-    cliState ? `cli_state:${encodeURIComponent(cliState)}` : "",
-  ]
-    .filter(Boolean)
-    .join(",") || undefined;
 
   // While the desktop handoff is in progress (or has produced a token/error),
   // render a dedicated screen instead of flashing the login form or redirecting
@@ -218,15 +223,6 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
-      google={
-        googleClientId
-          ? {
-              clientId: googleClientId,
-              redirectUri: `${window.location.origin}/auth/callback`,
-              state: googleState,
-            }
-          : undefined
-      }
       cliCallback={
         cliCallbackRaw && validateCliCallback(cliCallbackRaw)
           ? { url: cliCallbackRaw, state: cliState }

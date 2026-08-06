@@ -62,6 +62,7 @@ import {
   EMPTY_TIMELINE_ENTRIES,
   IssueSchema,
   ListIssuesResponseSchema,
+  LoginResponseSchema,
   TimelineEntriesSchema,
 } from "@multica/core/api/schemas";
 import {
@@ -362,18 +363,31 @@ class ApiClient {
   }
 
   // --- Auth ---
-  async sendCode(email: string): Promise<void> {
-    await this.fetch<void>("/auth/send-code", {
+  private async passwordAuth(
+    path: "/auth/login" | "/auth/register",
+    email: string,
+    password: string,
+  ): Promise<LoginResponse> {
+    const raw = await this.fetch<unknown>(path, {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, password }),
     });
+    // Authentication responses must be complete. A fallback token would be
+    // persisted in SecureStore and turn a server-shape error into a broken
+    // session, so reject malformed successful responses explicitly.
+    const parsed = LoginResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new ApiError("Invalid authentication response", 502, raw);
+    }
+    return parsed.data as LoginResponse;
   }
 
-  async verifyCode(email: string, code: string): Promise<LoginResponse> {
-    return this.fetch<LoginResponse>("/auth/verify-code", {
-      method: "POST",
-      body: JSON.stringify({ email, code }),
-    });
+  async register(email: string, password: string): Promise<LoginResponse> {
+    return this.passwordAuth("/auth/register", email, password);
+  }
+
+  async login(email: string, password: string): Promise<LoginResponse> {
+    return this.passwordAuth("/auth/login", email, password);
   }
 
   async getMe(opts?: { signal?: AbortSignal }): Promise<User> {

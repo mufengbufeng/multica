@@ -1,17 +1,23 @@
 ---
 title: Sign-in and signup
-description: Configure email verification codes, Google sign-in, and who can sign up.
+description: Configure email-and-password access and who can create accounts.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Multica signs users in with email verification codes by default; Google OAuth can be added on top. Existing users can always sign in again — signup restrictions only decide whether new accounts can be created.
+Multica signs users in with an email address and password. Email ownership is not verified during registration. Existing users sign in with the password they created; signup controls only decide whether a new account can be created.
 
-## Email verification codes
+## Email and password
 
-After the user enters an email address, Multica sends a 6-digit verification code. The code is valid for 10 minutes; once it verifies, the browser receives a sign-in cookie.
+Choose **Create account** on the sign-in screen, enter an email address, and choose a password with at least 8 characters. After registration, use the same email and password to sign in.
 
-Email can be delivered through Resend or SMTP. When both are configured, `SMTP_HOST` takes priority.
+<Callout type="warning">
+Because registration does not verify email ownership, use `ALLOW_SIGNUP=false` together with an allowlist when access must be limited to a known group.
+</Callout>
+
+## Email delivery for invitations
+
+Email delivery is not needed for password sign-in. Configure Resend or SMTP to deliver workspace invitation links and, during a temporary legacy-account migration, verification codes. When both are configured, `SMTP_HOST` takes priority.
 
 ### Using Resend
 
@@ -39,8 +45,6 @@ SMTP_PASSWORD=<password>
 SMTP_FROM_EMAIL=noreply@example.com
 ```
 
-Common connection modes:
-
 | Scenario | Configuration |
 |---|---|
 | Internal anonymous relay | `SMTP_PORT=25`, leave username and password empty |
@@ -49,53 +53,9 @@ Common connection modes:
 
 If `SMTP_FROM_EMAIL` is unset, it falls back to `RESEND_FROM_EMAIL`. Private CAs or self-signed certificates require adding the CA to the container trust store; `SMTP_TLS_INSECURE=true` skips certificate verification and should only be used temporarily on a trusted internal network.
 
-Some strict relays also require a valid EHLO name:
+Without an email service, the server still starts, but it rejects new workspace invitations and legacy verification-code requests. Invitation links and verification codes are bearer credentials and are never written to logs.
 
-```dotenv
-SMTP_EHLO_NAME=mail.example.com
-```
-
-### Behavior without an email service
-
-The server still starts, but verification codes and invitation links are only written to the log; no email is sent. This suits local development, not production.
-
-The startup log states whether the current mode is `Resend API`, `SMTP relay`, or `DEV mode`.
-
-## Fixed local verification code
-
-Local automated tests can set a fixed verification code:
-
-```dotenv
-APP_ENV=development
-MULTICA_DEV_VERIFICATION_CODE=888888
-```
-
-The code must be 6 digits. The fixed code is ignored when `APP_ENV=production`.
-
-<Callout type="warning">
-Do not enable a fixed code on a publicly reachable instance. The production combination is `APP_ENV=production` with an empty `MULTICA_DEV_VERIFICATION_CODE`.
-</Callout>
-
-## Google sign-in
-
-1. Create an OAuth 2.0 client in the [Google Cloud Console](https://console.cloud.google.com/).
-2. Add the Multica frontend's callback URL to **Authorized redirect URIs**:
-
-   ```text
-   https://multica.example.com/auth/callback
-   ```
-
-3. Set:
-
-   ```dotenv
-   GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxx
-   GOOGLE_REDIRECT_URI=https://multica.example.com/auth/callback
-   ```
-
-4. Restart the API service.
-
-The URLs in the Google Console and in `GOOGLE_REDIRECT_URI` must match exactly, including protocol, port, and trailing slash. Once configured, the sign-in page shows a Google sign-in button; the frontend image needs no rebuild.
+Upgrading to this release expires all pending invitations created before capability tokens were introduced. Reissue any invitation that should remain valid after the upgrade.
 
 ## Signup restrictions
 
@@ -109,11 +69,11 @@ Three variables together decide whether a new account can be created:
 
 The evaluation order is:
 
-1. The email matches `ALLOWED_EMAILS` — allow.
-2. Or its domain matches `ALLOWED_EMAIL_DOMAINS` — allow.
-3. With no match, if `ALLOW_SIGNUP=false` — reject.
-4. With `ALLOW_SIGNUP=true` but any allowlist configured and no match — still reject.
-5. With no allowlist configured and `ALLOW_SIGNUP=true` — allow.
+1. The email matches `ALLOWED_EMAILS` - allow.
+2. Or its domain matches `ALLOWED_EMAIL_DOMAINS` - allow.
+3. With no match, if `ALLOW_SIGNUP=false` - reject.
+4. With `ALLOW_SIGNUP=true` but any allowlist configured and no match - still reject.
+5. With no allowlist configured and `ALLOW_SIGNUP=true` - allow.
 
 Common configurations:
 
@@ -127,17 +87,16 @@ ALLOWED_EMAILS=partner@example.net
 ```
 
 <Callout type="info">
-Both allowlists also work as an explicit exception list when `ALLOW_SIGNUP=false`.
+Both allowlists also work as explicit exceptions when `ALLOW_SIGNUP=false`. A pre-provisioned account without a password cannot use public registration to set its initial password.
 </Callout>
 
-## Invitations and signup restrictions
+## Legacy account migration
 
-Invitations do not automatically bypass signup restrictions:
+Set `AUTH_LEGACY_AUTH_ENABLED=true` during a controlled compatibility window for installed clients and accounts created before password sign-in. The legacy email-code and Google endpoints authenticate only an existing account that has no password; they never create an account or change a password.
 
-- If the invitee already has a Multica account, they can sign in and accept the invitation.
-- If they do not, their email must satisfy the signup rules above.
+After a legacy user signs in with a delivered verification code, the web sign-in page asks them to set a password. Keep email delivery configured until those users have completed that step. If Google OAuth was used by an installed client before the upgrade, keep its existing `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and registered `GOOGLE_REDIRECT_URI` configured during the window.
 
-To invite a new member on an instance with open signup disabled, add their email to `ALLOWED_EMAILS` first. Once the account is created and the invitation accepted, you can remove the entry again.
+Use the server telemetry for legacy routes, plus your client-release adoption data, to decide when to set `AUTH_LEGACY_AUTH_ENABLED=false` and restart the API. Disabled legacy routes return `410 Gone` so outdated clients receive an upgrade signal rather than an unexplained `404`.
 
 ## Session lifetime
 
@@ -151,6 +110,6 @@ Restart the API service after changing it. The value only affects sign-in cookie
 
 ## Next steps
 
-- [Environment variables](/environment-variables) — the full variable reference.
-- [Authentication and tokens](/auth-tokens) — sign-in sessions and token types.
-- [Members and roles](/members-roles) — invitations and roles.
+- [Environment variables](/environment-variables) - the full variable reference.
+- [Authentication and tokens](/auth-tokens) - sign-in sessions and token types.
+- [Members and roles](/members-roles) - invitations and roles.

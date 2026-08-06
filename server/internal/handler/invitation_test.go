@@ -5,10 +5,56 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/multica-ai/multica/server/internal/auth"
 )
 
 const invitationTestEmail = "invitation-test@multica.ai"
+
+type invitationTestEmailDelivery struct {
+	invitationTokens chan string
+}
+
+func newInvitationTestEmailDelivery() *invitationTestEmailDelivery {
+	return &invitationTestEmailDelivery{invitationTokens: make(chan string, 4)}
+}
+
+func (d *invitationTestEmailDelivery) CanDeliver() bool { return true }
+
+func (d *invitationTestEmailDelivery) CanDeliverInvitations() bool { return true }
+
+func (d *invitationTestEmailDelivery) SendLegacyVerificationCode(_, _ string) error { return nil }
+
+func (d *invitationTestEmailDelivery) SendInvitationEmail(_, _, _, _, token string) error {
+	select {
+	case d.invitationTokens <- token:
+	default:
+	}
+	return nil
+}
+
+func (d *invitationTestEmailDelivery) waitForInvitationToken(t *testing.T) string {
+	t.Helper()
+	select {
+	case token := <-d.invitationTokens:
+		return token
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invitation capability delivery")
+		return ""
+	}
+}
+
+func useInvitationTestEmailDelivery(t *testing.T) *invitationTestEmailDelivery {
+	t.Helper()
+	delivery := newInvitationTestEmailDelivery()
+	previous := testHandler.EmailService
+	testHandler.EmailService = delivery
+	t.Cleanup(func() { testHandler.EmailService = previous })
+	return delivery
+}
 
 func clearInvitationsForTestWorkspace(t *testing.T) {
 	t.Helper()
@@ -30,6 +76,7 @@ func clearInvitationsForTestWorkspace(t *testing.T) {
 // Sanity check: a fresh, live pending invitation must block re-invitation.
 func TestCreateInvitation_BlocksWhilePending(t *testing.T) {
 	clearInvitationsForTestWorkspace(t)
+	useInvitationTestEmailDelivery(t)
 
 	req := newRequest("POST", "/api/workspaces/"+testWorkspaceID+"/members", CreateMemberRequest{
 		Email: invitationTestEmail,
@@ -59,6 +106,7 @@ func TestCreateInvitation_BlocksWhilePending(t *testing.T) {
 // 'expired' and a fresh pending row should be created.
 func TestCreateInvitation_AllowsAfterExpiry(t *testing.T) {
 	clearInvitationsForTestWorkspace(t)
+	useInvitationTestEmailDelivery(t)
 	ctx := context.Background()
 
 	var staleID string
@@ -110,5 +158,93 @@ func TestCreateInvitation_AllowsAfterExpiry(t *testing.T) {
 	}
 	if pendingCount != 1 {
 		t.Fatalf("expected exactly 1 pending invitation after re-invite, got %d", pendingCount)
+	}
+}
+
+// A matching email address is delivery metadata only. A user must present the
+// high-entropy capability delivered in the invitation email before the row is
+// bound to their account.
+func TestInvitationClaimRequiresDeliveredCapability(t *testing.T) {
+	clearInvitationsForTestWorkspace(t)
+	delivery := useInvitationTestEmailDelivery(t)
+	ctx := context.Background()
+	const email = "invitation-capability-claim@multica.ai"
+
+	var claimantID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Invitation Capability Claimant', $1)
+		RETURNING id
+	`, email).Scan(&claimantID); err != nil {
+		t.Fatalf("create claimant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, claimantID)
+	})
+
+	createReq := newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/members", CreateMemberRequest{
+		Email: email,
+		Role:  "member",
+	})
+	createReq = withURLParam(createReq, "id", testWorkspaceID)
+	createW := httptest.NewRecorder()
+	testHandler.CreateInvitation(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create invitation: expected 201, got %d: %s", createW.Code, createW.Body.String())
+	}
+
+	var invitation InvitationResponse
+	if err := json.NewDecoder(createW.Body).Decode(&invitation); err != nil {
+		t.Fatalf("decode invitation: %v", err)
+	}
+	token := delivery.waitForInvitationToken(t)
+	if token == "" || strings.Contains(createW.Body.String(), token) {
+		t.Fatal("invitation capability must be delivered separately, not returned by the API")
+	}
+
+	var storedHash string
+	if err := testPool.QueryRow(ctx, `SELECT token_hash FROM workspace_invitation WHERE id = $1`, invitation.ID).Scan(&storedHash); err != nil {
+		t.Fatalf("read invitation token hash: %v", err)
+	}
+	if storedHash != auth.HashToken(token) || storedHash == token {
+		t.Fatal("invitation capability must be persisted only as its hash")
+	}
+
+	listReq := newRequest(http.MethodGet, "/api/invitations", nil)
+	listReq.Header.Set("X-User-ID", claimantID)
+	listW := httptest.NewRecorder()
+	testHandler.ListMyInvitations(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list invitations: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var listed []InvitationResponse
+	if err := json.NewDecoder(listW.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode invitation list: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("email-only account must not see an unclaimed invitation: %+v", listed)
+	}
+
+	claim := func(capability string) *httptest.ResponseRecorder {
+		req := newRequest(http.MethodPost, "/api/invitations/"+invitation.ID+"/claim", ClaimInvitationRequest{Token: capability})
+		req.Header.Set("X-User-ID", claimantID)
+		req = withURLParam(req, "id", invitation.ID)
+		w := httptest.NewRecorder()
+		testHandler.ClaimInvitation(w, req)
+		return w
+	}
+	if wrong := claim(strings.Repeat("x", len(token))); wrong.Code != http.StatusNotFound {
+		t.Fatalf("claim with wrong capability: expected 404, got %d: %s", wrong.Code, wrong.Body.String())
+	}
+	if claimed := claim(token); claimed.Code != http.StatusOK {
+		t.Fatalf("claim with delivered capability: expected 200, got %d: %s", claimed.Code, claimed.Body.String())
+	}
+
+	var boundUserID string
+	if err := testPool.QueryRow(ctx, `SELECT invitee_user_id::text FROM workspace_invitation WHERE id = $1`, invitation.ID).Scan(&boundUserID); err != nil {
+		t.Fatalf("read invitation claimant: %v", err)
+	}
+	if boundUserID != claimantID {
+		t.Fatalf("invitation claimant = %q, want %q", boundUserID, claimantID)
 	}
 }

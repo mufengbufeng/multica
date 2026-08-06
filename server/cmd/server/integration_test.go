@@ -274,59 +274,39 @@ func TestConfigRouteIsPublic(t *testing.T) {
 
 // ---- Auth ----
 
-func TestSendCodeAndVerify(t *testing.T) {
-	const email = "integration-sendcode@multica.ai"
+func TestRegisterAndLogin(t *testing.T) {
+	const email = "integration-password@multica.ai"
+	const password = "correct-horse-battery-staple"
 	ctx := context.Background()
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		var userID string
-		err := testPool.QueryRow(ctx, `SELECT id FROM "user" WHERE email = $1`, email).Scan(&userID)
-		if err == nil {
-			rows, queryErr := testPool.Query(ctx, `
-				SELECT w.id FROM workspace w JOIN member m ON m.workspace_id = w.id WHERE m.user_id = $1
-			`, userID)
-			if queryErr == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var wsID string
-					if rows.Scan(&wsID) == nil {
-						testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, wsID)
-					}
-				}
-			}
-		}
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
 	})
-
-	// Step 1: Send code
-	body, _ := json.Marshal(map[string]string{"email": email})
-	resp, err := http.Post(testServer.URL+"/auth/send-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("send-code failed: %v", err)
+	if _, err := testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email); err != nil {
+		t.Fatalf("clear test user: %v", err)
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf("send-code: expected 200, got %d", resp.StatusCode)
+
+	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	resp, err := http.Post(testServer.URL+"/auth/register", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("register: expected 200, got %d: %s", resp.StatusCode, body)
 	}
 	resp.Body.Close()
 
-	// Read code from DB
-	var code string
-	err = testPool.QueryRow(ctx, `SELECT code FROM verification_code WHERE email = $1 ORDER BY created_at DESC LIMIT 1`, email).Scan(&code)
+	body, _ = json.Marshal(map[string]string{"email": email, "password": password})
+	resp, err = http.Post(testServer.URL+"/auth/login", "application/json", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("failed to read code from DB: %v", err)
+		t.Fatalf("login failed: %v", err)
 	}
-
-	// Step 2: Verify code
-	body, _ = json.Marshal(map[string]string{"email": email, "code": code})
-	resp, err = http.Post(testServer.URL+"/auth/verify-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("verify-code failed: %v", err)
-	}
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		t.Fatalf("verify-code: expected 200, got %d: %s", resp.StatusCode, respBody)
+		t.Fatalf("login: expected 200, got %d: %s", resp.StatusCode, respBody)
 	}
 
 	var loginResp struct {
@@ -357,40 +337,27 @@ func TestSendCodeAndVerify(t *testing.T) {
 	meResp.Body.Close()
 }
 
-func TestVerifyCodeNewUserHasNoWorkspace(t *testing.T) {
-	const email = "new-integration-verify@multica.ai"
+func TestRegisterNewUserHasNoWorkspace(t *testing.T) {
+	const email = "new-integration-password@multica.ai"
+	const password = "correct-horse-battery-staple"
 	ctx := context.Background()
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
 	})
 
-	testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
-
-	// Send code
-	body, _ := json.Marshal(map[string]string{"email": email})
-	resp, err := http.Post(testServer.URL+"/auth/send-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("send-code failed: %v", err)
+	if _, err := testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email); err != nil {
+		t.Fatalf("clear test user: %v", err)
 	}
-	resp.Body.Close()
-
-	// Read code from DB
-	var code string
-	err = testPool.QueryRow(ctx, `SELECT code FROM verification_code WHERE email = $1 ORDER BY created_at DESC LIMIT 1`, email).Scan(&code)
+	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	resp, err := http.Post(testServer.URL+"/auth/register", "application/json", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("failed to read code from DB: %v", err)
-	}
-
-	// Verify code
-	body, _ = json.Marshal(map[string]string{"email": email, "code": code})
-	resp, err = http.Post(testServer.URL+"/auth/verify-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("verify-code failed: %v", err)
+		t.Fatalf("register failed: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("verify-code: expected 200, got %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("register: expected 200, got %d: %s", resp.StatusCode, body)
 	}
 
 	var loginResp struct {

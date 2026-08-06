@@ -12,6 +12,7 @@ import (
 )
 
 const createVerificationCode = `-- name: CreateVerificationCode :one
+
 INSERT INTO verification_code (email, code, expires_at)
 VALUES ($1, $2, $3)
 RETURNING id, email, code, expires_at, used, created_at, attempts
@@ -23,6 +24,8 @@ type CreateVerificationCodeParams struct {
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 }
 
+// Legacy email-code compatibility queries. New accounts use passwords; these
+// rows authenticate only pre-migration accounts while compatibility is enabled.
 func (q *Queries) CreateVerificationCode(ctx context.Context, arg CreateVerificationCodeParams) (VerificationCode, error) {
 	row := q.db.QueryRow(ctx, createVerificationCode, arg.Email, arg.Code, arg.ExpiresAt)
 	var i VerificationCode

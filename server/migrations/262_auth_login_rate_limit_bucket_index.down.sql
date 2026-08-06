@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_auth_login_rate_limit_bucket_key;
