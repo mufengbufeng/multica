@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop
+.PHONY: help makehelp dev server daemon cli multica cli-version build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -262,16 +262,37 @@ daemon: ## Restart the local agent daemon using the CLI's stored auth/session
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"
 
-multica: ## Run the multica CLI entrypoint directly from the Go source tree
-	cd server && go run -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" ./cmd/multica $(MULTICA_ARGS)
+multica: cli-version ## Run the multica CLI entrypoint directly from the Go source tree
+	cd server && go run -ldflags "-X main.version=$(RESOLVE_CLI_BUILD_VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" ./cmd/multica $(MULTICA_ARGS)
 
-VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
-COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-DATE    ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+# VERSION remains a Make-level override. Prefer MULTICA_CLI_BUILD_VERSION for
+# direct invocations; both values are validated by cmd/buildversion before a
+# daemon-capable binary is built.
+VERSION ?=
+ifeq ($(origin COMMIT), undefined)
+ifeq ($(OS),Windows_NT)
+COMMIT := $(or $(shell git rev-parse --short HEAD 2>NUL),unknown)
+else
+COMMIT := $(or $(shell git rev-parse --short HEAD 2>/dev/null),unknown)
+endif
+endif
+ifeq ($(origin DATE), undefined)
+ifeq ($(OS),Windows_NT)
+DATE := $(shell powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')")
+else
+DATE := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+endif
+endif
 
-build: ## Build the server, CLI, and migrate binaries into server/bin
-	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/server ./cmd/server
-	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
+CLI_BUILD_VERSION_OVERRIDE = $(or $(MULTICA_CLI_BUILD_VERSION),$(VERSION))
+RESOLVE_CLI_BUILD_VERSION = $(strip $(shell cd server && go run ./cmd/buildversion --override "$(CLI_BUILD_VERSION_OVERRIDE)"))
+
+cli-version: ## Print the verified version used for source-built CLI binaries
+	@cd server && go run ./cmd/buildversion --override "$(CLI_BUILD_VERSION_OVERRIDE)"
+
+build: cli-version ## Build the server, CLI, and migrate binaries into server/bin
+	cd server && go build -ldflags "-X main.version=$(RESOLVE_CLI_BUILD_VERSION) -X main.commit=$(COMMIT)" -o bin/server ./cmd/server
+	cd server && go build -ldflags "-X main.version=$(RESOLVE_CLI_BUILD_VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
 	cd server && go build -o bin/migrate ./cmd/migrate
 
 test: ## Run Go tests after ensuring the target DB exists and migrations are applied

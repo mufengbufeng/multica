@@ -6,8 +6,9 @@
 // source — no more stale binary surprises. Go's build cache makes the
 // no-op case (nothing changed) effectively free.
 //
-// ldflags mirror `make build` so `multica --version` reports a meaningful
-// version / commit / date.
+// The build-version helper shared with Makefile resolves a tag-backed version
+// before we set ldflags. A bare hash or "dev" must never become a daemon CLI
+// version because the server cannot verify its capabilities.
 //
 // Graceful: if `go` is not installed (e.g. frontend-only contributor), we
 // skip the build and fall through to auto-install at runtime. A genuine
@@ -74,11 +75,7 @@ const srcBinary = join(serverDir, "bin", `${goos}-${goarch}`, binName);
 const destDir = join(repoRoot, "apps", "desktop", "resources", "bin");
 const destBinary = join(destDir, binName);
 
-// Hand git arguments straight to the binary (no shell). A match pattern like
-// `v[0-9]*` must reach git as one literal argument; routing it through a shell
-// string breaks on Windows, where cmd.exe keeps the POSIX single quotes and
-// git matches no tag — degrading the bundled CLI's version to the
-// 0.0.0-g<hash> fallback.
+// Hand git arguments straight to the binary (no shell).
 function git(...args) {
   try {
     return execFileSync("git", args, { encoding: "utf-8" }).trim();
@@ -96,6 +93,33 @@ function hasGo() {
   }
 }
 
+function resolveCliBuildVersion() {
+  const env = { ...process.env };
+  // The resolver itself must run on the host even when the subsequent CLI
+  // build cross-compiles for another Desktop target.
+  delete env.GOOS;
+  delete env.GOARCH;
+
+  try {
+    const version = execFileSync("go", ["run", "./cmd/buildversion"], {
+      cwd: serverDir,
+      encoding: "utf-8",
+      env,
+    }).trim();
+    if (!version) {
+      throw new Error("buildversion returned no version");
+    }
+    return version;
+  } catch (error) {
+    const stderr =
+      error && typeof error === "object" && "stderr" in error
+        ? String(error.stderr ?? "").trim()
+        : "";
+    const detail = stderr || (error instanceof Error ? error.message : String(error));
+    throw new Error(`[bundle-cli] cannot derive a trusted CLI version: ${detail}`);
+  }
+}
+
 async function exists(p) {
   try {
     await access(p, constants.F_OK);
@@ -106,9 +130,7 @@ async function exists(p) {
 }
 
 if (hasGo()) {
-  const version =
-    git("describe", "--tags", "--match", "v[0-9]*", "--always", "--dirty") ||
-    "dev";
+  const version = resolveCliBuildVersion();
   const commit = git("rev-parse", "--short", "HEAD") || "unknown";
   const date = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const ldflags = `-X main.version=${version} -X main.commit=${commit} -X main.date=${date}`;
