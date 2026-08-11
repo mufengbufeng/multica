@@ -55,3 +55,11 @@ make check            # Full verification pipeline
 ```
 
 See CLAUDE.md for the authoritative rules and common commands.
+
+### Windows Command Invocation
+
+The task command runner already uses PowerShell. Invoke `multica ...` directly;
+do not wrap it in a quoted `pwsh.exe` path. In PowerShell that path is a string
+literal, so subsequent flags such as `-Command` are a parser error. If an
+explicit PowerShell executable is genuinely needed, use the call operator:
+`& 'C:\Program Files\PowerShell\7\pwsh.exe' -NoProfile -Command "..."`.
