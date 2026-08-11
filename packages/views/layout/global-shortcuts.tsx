@@ -13,7 +13,7 @@ import {
 import { useChatStore } from "@multica/core/chat";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores";
 import { useModalStore } from "@multica/core/modals";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { projectIdFromPathname, useWorkspacePaths } from "@multica/core/paths";
 import { isImeComposing } from "@multica/core/utils";
 import { isFloatingChatRouteSuppressed } from "../chat/floating-chat-visibility";
 import { useNavigation } from "../navigation";
@@ -109,13 +109,10 @@ export function GlobalShortcuts() {
       }
       if (actionId === "createIssue") {
         if (useModalStore.getState().modal) return;
-        const projectMatch = navigation.pathname.match(
-          /^\/[^/]+\/projects\/([^/]+)$/,
+        const projectId = projectIdFromPathname(navigation.pathname);
+        openCreateIssueWithPreference(
+          projectId ? { project_id: projectId } : undefined,
         );
-        const data = projectMatch
-          ? { project_id: projectMatch[1] }
-          : undefined;
-        openCreateIssueWithPreference(data);
         return;
       }
 

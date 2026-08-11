@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
+const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, openCreateIssue, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
   appForeground: { current: true },
   sidebarState: { setOpenMobile: vi.fn() },
   chatSessions: { current: [] as { id?: string; unread_count?: number }[] },
@@ -12,6 +12,7 @@ const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, n
   deletePin: vi.fn(),
   inboxItems: { current: [] as { id: string; read: boolean }[] },
   navigation: { current: { pathname: "/acme/issues" } },
+  openCreateIssue: vi.fn(),
   summary: { current: [] as { workspace_id: string; count: number }[] },
   workspaces: {
     current: [] as { id: string; name: string; slug: string; avatar_url: string | null }[],
@@ -56,13 +57,20 @@ vi.mock("@multica/ui/components/ui/sidebar", () => ({
   SidebarMenuButton: ({
     children,
     isActive,
+    onClick,
     render,
   }: {
     children: React.ReactNode;
     isActive?: boolean;
+    onClick?: () => void;
     render?: React.ReactElement<{ href?: string }>;
   }) => (
-    <button type="button" data-active={isActive ? "true" : undefined} data-href={render?.props.href}>
+    <button
+      type="button"
+      data-active={isActive ? "true" : undefined}
+      data-href={render?.props.href}
+      onClick={onClick}
+    >
       {children}
     </button>
   ),
@@ -162,7 +170,7 @@ vi.mock("@multica/core/inbox/queries", () => ({
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
-  openCreateIssueWithPreference: vi.fn(),
+  openCreateIssueWithPreference: openCreateIssue,
 }));
 vi.mock("@multica/core/issues/stores/draft-store", () => ({ useIssueDraftStore: () => false }));
 vi.mock("@multica/core/modals", () => ({ useModalStore: { getState: () => ({ modal: null, open: vi.fn() }) } }));
@@ -233,6 +241,21 @@ describe("PinRow", () => {
       "true",
     );
     expect(container.querySelector('button[data-href="/acme/issues"]')).not.toHaveAttribute("data-active");
+  });
+});
+
+describe("new issue project context", () => {
+  beforeEach(() => {
+    openCreateIssue.mockReset();
+    navigation.current.pathname = "/acme/projects/project-1";
+  });
+
+  it("passes the current project to the create flow", () => {
+    render(<AppSidebar />);
+
+    screen.getByTitle("C").closest("button")?.click();
+
+    expect(openCreateIssue).toHaveBeenCalledWith({ project_id: "project-1" });
   });
 });
 

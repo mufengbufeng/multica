@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { paths, isGlobalPath } from "./paths";
+import { paths, isGlobalPath, projectIdFromPathname } from "./paths";
 
 describe("paths.workspace(slug)", () => {
   const ws = paths.workspace("acme");
@@ -56,5 +56,19 @@ describe("isGlobalPath", () => {
   it("returns false for workspace-scoped paths", () => {
     expect(isGlobalPath("/acme/issues")).toBe(false);
     expect(isGlobalPath("/")).toBe(false);
+  });
+});
+
+describe("projectIdFromPathname", () => {
+  it("returns the project id from a project detail route", () => {
+    expect(projectIdFromPathname("/acme/projects/project%201")).toBe(
+      "project 1",
+    );
+  });
+
+  it("returns null for non-detail project routes and malformed ids", () => {
+    expect(projectIdFromPathname("/acme/projects")).toBeNull();
+    expect(projectIdFromPathname("/acme/projects/project-1/resources")).toBeNull();
+    expect(projectIdFromPathname("/acme/projects/%")).toBeNull();
   });
 });

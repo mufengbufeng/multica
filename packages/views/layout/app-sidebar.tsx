@@ -57,7 +57,12 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useAuthStore } from "@multica/core/auth";
-import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
+import {
+  paths,
+  projectIdFromPathname,
+  useCurrentWorkspace,
+  useWorkspacePaths,
+} from "@multica/core/paths";
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -654,7 +659,12 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarMenuItem>
               <SidebarMenuButton
                 className="text-muted-foreground"
-                onClick={() => openCreateIssueWithPreference()}
+                onClick={() => {
+                  const projectId = projectIdFromPathname(pathname);
+                  openCreateIssueWithPreference(
+                    projectId ? { project_id: projectId } : undefined,
+                  );
+                }}
               >
                 <span className="relative">
                   <SquarePen />

@@ -26,6 +26,10 @@ vi.mock("@multica/core/modals", () => ({
   useModalStore: { getState: () => ({ modal: null }) },
 }));
 vi.mock("@multica/core/paths", () => ({
+  projectIdFromPathname: (pathname: string) => {
+    const match = pathname.match(/^\/[^/]+\/projects\/([^/]+)$/);
+    return match?.[1] ?? null;
+  },
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
     chat: () => "/acme/chat",

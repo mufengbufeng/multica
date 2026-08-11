@@ -439,6 +439,21 @@ describe("SearchCommand", () => {
     expect(useSearchStore.getState().open).toBe(false);
   });
 
+  it("passes the current project to the new issue flow", async () => {
+    const user = userEvent.setup();
+    mockPathname.current = "/ws-test/projects/project-1";
+    renderSearch();
+
+    const newIssue = await screen.findByText(
+      (_, el) => el?.textContent === "New Issue" && el?.tagName === "SPAN",
+    );
+    await user.click(newIssue);
+
+    expect(mockOpenModal).toHaveBeenCalledWith("quick-create-issue", {
+      project_id: "project-1",
+    });
+  });
+
   it("hides copy-link commands when not on an issue detail route", async () => {
     const user = userEvent.setup();
     mockPathname.current = "/ws-test/projects";

@@ -36,7 +36,7 @@ import {
 } from "@multica/core/issues/stores";
 import { issueDetailOptions, issueTimelineOptions } from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { projectIdFromPathname, useWorkspacePaths } from "@multica/core/paths";
 import type { WorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
 import { createShortcutChord } from "@multica/core/shortcuts";
@@ -198,6 +198,7 @@ export function SearchCommand() {
     const raw = match?.[1];
     return raw ? decodeURIComponent(raw) : null;
   }, [pathname]);
+  const currentProjectId = projectIdFromPathname(pathname);
   const { data: currentIssue = null } = useQuery({
     ...issueDetailOptions(wsId, currentIssueId ?? ""),
     enabled: !!currentIssueId,
@@ -220,7 +221,9 @@ export function SearchCommand() {
         icon: Plus,
         keywords: ["new", "issue", "create", "add"],
         onSelect: () => {
-          openCreateIssueWithPreference();
+          openCreateIssueWithPreference(
+            currentProjectId ? { project_id: currentProjectId } : undefined,
+          );
           setOpen(false);
         },
       },
@@ -343,7 +346,7 @@ export function SearchCommand() {
     );
 
     return items;
-  }, [currentIssue, currentIssueId, getShareableUrl, pathname, queryClient, setOpen, setTheme, theme, t]);
+  }, [currentIssue, currentIssueId, currentProjectId, getShareableUrl, pathname, queryClient, setOpen, setTheme, theme, t]);
 
   const filteredCommands = useMemo(() => {
     const q = query.trim().toLowerCase();

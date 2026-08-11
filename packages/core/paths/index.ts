@@ -1,4 +1,4 @@
-export { paths, isGlobalPath } from "./paths";
+export { paths, isGlobalPath, projectIdFromPathname } from "./paths";
 export type { WorkspacePaths } from "./paths";
 export { RESERVED_SLUGS, isReservedSlug } from "./reserved-slugs";
 export {

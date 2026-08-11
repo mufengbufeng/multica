@@ -78,3 +78,15 @@ const GLOBAL_PREFIXES = ["/login", "/workspaces/", "/invite/", "/invitations", "
 export function isGlobalPath(path: string): boolean {
   return GLOBAL_PREFIXES.some((p) => path === p || path.startsWith(p));
 }
+
+export function projectIdFromPathname(pathname: string): string | null {
+  const match = pathname.match(/^\/[^/]+\/projects\/([^/]+)$/);
+  const projectId = match?.[1];
+  if (!projectId) return null;
+
+  try {
+    return decodeURIComponent(projectId);
+  } catch {
+    return null;
+  }
+}
