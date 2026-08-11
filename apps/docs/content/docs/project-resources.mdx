@@ -34,7 +34,7 @@ A resource's `ref` sets the branch, tag, or commit that later checkouts use by d
 
 ## Add a local directory
 
-The UI for adding a local directory is Desktop-only, because browsers cannot pick folders on your computer.
+Desktop lets you pick a folder directly. In the browser, open the project's **Resources**, choose "Add local directory", select a local runtime you can manage, and enter the absolute path on that runtime's computer. Browsers cannot inspect that computer's filesystem; the target daemon validates the path before it uses it for a task.
 
 <Callout type="warning">
 **This is an escape hatch, not a more convenient default.** `local_directory` exists for people who have no other option — the canonical case is a game project whose checkout is tens of gigabytes, where re-cloning per task is simply not viable.
@@ -43,13 +43,15 @@ If your directory is an ordinary git repo you can clone, **use `github_repo` ins
 </Callout>
 
 
-1. Make sure Desktop's local daemon is online.
-2. Open the project's **Resources**.
-3. Choose "Add local directory", then pick the folder to use.
+1. Open the project's **Resources**.
+2. Choose "Add local directory".
+3. In Desktop, pick the folder to use. In the browser, select the target local runtime and enter that computer's absolute path.
 
-The directory must be an absolute path, must already exist, and must be readable and writable by the current daemon. These paths are rejected: system roots and drive roots (`/`, `C:\`), home directories themselves and the parents of home directories (such as `/Users`, `/home`, `/root`), and system directories such as `/etc`, `/var`, `/tmp`, `/usr`, and `/opt`. If the chosen path is a symlink, it is resolved to its real path first and validated again by the same rules; the serial lock also applies to the real path.
+The directory must be an absolute path, must already exist, and must be readable and writable by the target daemon. Desktop checks this when you choose the folder; browser bindings are checked by the target daemon before a task uses them. These paths are rejected: system roots and drive roots (`/`, `C:\`), home directories themselves and the parents of home directories (such as `/Users`, `/home`, `/root`), and system directories such as `/etc`, `/var`, `/tmp`, `/usr`, and `/opt`. If the chosen path is a symlink, it is resolved to its real path first and validated again by the same rules; the serial lock also applies to the real path.
 
 Each project can link at most one local directory per daemon. Different computers on a team can each link their own directory for the same project.
+
+To change an existing binding, use **Change directory** on its resource row. It updates that resource in place; in the browser you may also move it to another local runtime you can manage, as long as that daemon does not already have a directory for the project.
 
 <Callout type="warning">
 A local directory is not an isolated environment. The agent directly sees and modifies your current branch and uncommitted files; Multica does not automatically switch branches, stash, commit, push, or open PRs.
