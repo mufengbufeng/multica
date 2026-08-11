@@ -2939,6 +2939,45 @@ func TestCodexExecuteTimesOutWhenTurnStopsAfterToolResult(t *testing.T) {
 	}
 }
 
+func TestCodexCommandExecutionStallDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	client := &codexClient{}
+	client.handleItemNotification("item/started", map[string]any{
+		"item": map[string]any{"type": "commandExecution", "id": "cmd-stalled"},
+	})
+	pendingID, pending := client.pendingCommandExecution()
+	if !pending || pendingID != "cmd-stalled" {
+		t.Fatalf("pending command = (%q, %t), want (cmd-stalled, true)", pendingID, pending)
+	}
+
+	errText := buildCodexTimeoutDiagnosticError(codexTimeoutDiagnostic{
+		Kind:                      codexTimeoutSemanticInactivity,
+		Timeout:                   time.Minute,
+		LastActivity:              "item/started:commandExecution:cmd-stalled",
+		ThreadID:                  "thread-1",
+		TurnID:                    "turn-1",
+		PendingCommandExecutionID: pendingID,
+	}, "")
+	for _, want := range []string{
+		CodexSemanticInactivityMarker,
+		CodexCommandExecutionStallMarker,
+		"cmd-stalled",
+		"not a Multica credential or API failure",
+	} {
+		if !strings.Contains(errText, want) {
+			t.Errorf("diagnostic missing %q: %s", want, errText)
+		}
+	}
+
+	client.handleItemNotification("item/completed", map[string]any{
+		"item": map[string]any{"type": "commandExecution", "id": "cmd-stalled"},
+	})
+	if _, pending := client.pendingCommandExecution(); pending {
+		t.Fatal("completed command remained pending")
+	}
+}
+
 func TestCodexExecuteFirstTurnNoProgressSurfacesDiagnostics(t *testing.T) {
 	// Not t.Parallel(): this test mutates codexGracefulShutdownTimeoutNanos.
 	// The model catalog signal below makes both attempts retry safe, so this

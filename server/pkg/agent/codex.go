@@ -148,6 +148,10 @@ const CodexSemanticInactivityMarker = "codex semantic inactivity timeout"
 // Codex accepts a turn and then never emits any item, completion, or error.
 const CodexFirstTurnNoProgressMarker = "codex app-server no progress timeout"
 
+// CodexCommandExecutionStallMarker identifies a terminal bridge failure after
+// Codex has started a command execution but never returned its completion.
+const CodexCommandExecutionStallMarker = "codex command execution stalled"
+
 // CodexHandshakeTimeoutMarker identifies a Codex app-server startup RPC that
 // did not answer within the bounded handshake window.
 const CodexHandshakeTimeoutMarker = "codex app-server handshake timeout"
@@ -204,13 +208,14 @@ const (
 )
 
 type codexTimeoutDiagnostic struct {
-	Kind         codexTimeoutKind
-	Timeout      time.Duration
-	LastActivity string
-	ThreadID     string
-	TurnID       string
-	Model        string
-	CodexVersion string
+	Kind                      codexTimeoutKind
+	Timeout                   time.Duration
+	LastActivity              string
+	ThreadID                  string
+	TurnID                    string
+	Model                     string
+	CodexVersion              string
+	PendingCommandExecutionID string
 }
 
 // codexFirstItemWaitObservation records the interval from turn/started to the
@@ -1539,13 +1544,15 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				waitingForTurn = false
 				finishFirstItemWait("semantic_inactivity_timeout")
 				finalStatus = "timeout"
+				pendingCommandID, pendingCommandOpen := c.pendingCommandExecution()
 				timeoutDiagnostic = codexTimeoutDiagnostic{
-					Kind:         codexTimeoutSemanticInactivity,
-					Timeout:      semanticInactivityTimeout,
-					LastActivity: lastSemanticActivityDescription,
-					ThreadID:     threadID,
-					TurnID:       c.turnID,
-					Model:        opts.Model,
+					Kind:                      codexTimeoutSemanticInactivity,
+					Timeout:                   semanticInactivityTimeout,
+					LastActivity:              lastSemanticActivityDescription,
+					ThreadID:                  threadID,
+					TurnID:                    c.turnID,
+					Model:                     opts.Model,
+					PendingCommandExecutionID: pendingCommandID,
 				}
 				b.cfg.Logger.Warn(CodexSemanticInactivityMarker,
 					"pid", cmd.Process.Pid,
@@ -1554,6 +1561,8 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 					"timeout", semanticInactivityTimeout.String(),
 					"last_activity", lastSemanticActivityDescription,
 					"idle_for", time.Since(lastSemanticActivity).Round(time.Millisecond).String(),
+					"pending_command_execution", pendingCommandOpen,
+					"pending_command_execution_id", pendingCommandID,
 				)
 			case <-runCtx.Done():
 				finishRunContextDone()
@@ -1943,12 +1952,22 @@ func buildCodexTimeoutDiagnosticError(diag codexTimeoutDiagnostic, stderrTail st
 			formatCodexDiagnosticFields(diag),
 		)
 	case codexTimeoutSemanticInactivity:
-		msg = fmt.Sprintf("%s after %s without agent progress (last activity: %s; %s)",
-			CodexSemanticInactivityMarker,
-			diag.Timeout,
-			nonEmptyCodexDiagnosticValue(diag.LastActivity),
-			formatCodexDiagnosticFields(diag),
-		)
+		if diag.PendingCommandExecutionID != "" {
+			msg = fmt.Sprintf("%s: %s after %s; an exec_command started but never completed (call_id=%q; %s). Diagnosis: the Codex command bridge or terminal runner stopped returning events, not a Multica credential or API failure",
+				CodexSemanticInactivityMarker,
+				CodexCommandExecutionStallMarker,
+				diag.Timeout,
+				diag.PendingCommandExecutionID,
+				formatCodexDiagnosticFields(diag),
+			)
+		} else {
+			msg = fmt.Sprintf("%s after %s without agent progress (last activity: %s; %s)",
+				CodexSemanticInactivityMarker,
+				diag.Timeout,
+				nonEmptyCodexDiagnosticValue(diag.LastActivity),
+				formatCodexDiagnosticFields(diag),
+			)
+		}
 	default:
 		msg = "codex timed out"
 	}
@@ -2097,12 +2116,44 @@ type codexClient struct {
 	notificationProtocol string // "unknown", "legacy", "raw"
 	turnStarted          bool
 	completedTurnIDs     map[string]bool
+	commandExecutionsMu  sync.Mutex
+	commandExecutions    map[string]struct{} // active command execution ids only
 
 	usageMu sync.Mutex
 	usage   TokenUsage // accumulated from turn events
 
 	turnErrorMu sync.Mutex
 	turnError   string // captured from turn/completed status=failed or terminal error notifications
+}
+
+func (c *codexClient) commandExecutionStarted(id string) {
+	if id == "" {
+		return
+	}
+	c.commandExecutionsMu.Lock()
+	if c.commandExecutions == nil {
+		c.commandExecutions = make(map[string]struct{})
+	}
+	c.commandExecutions[id] = struct{}{}
+	c.commandExecutionsMu.Unlock()
+}
+
+func (c *codexClient) commandExecutionCompleted(id string) {
+	if id == "" {
+		return
+	}
+	c.commandExecutionsMu.Lock()
+	delete(c.commandExecutions, id)
+	c.commandExecutionsMu.Unlock()
+}
+
+func (c *codexClient) pendingCommandExecution() (string, bool) {
+	c.commandExecutionsMu.Lock()
+	defer c.commandExecutionsMu.Unlock()
+	for id := range c.commandExecutions {
+		return id, true
+	}
+	return "", false
 }
 
 // codexTurnNotificationGate keeps resume-time history replay from mutating the
@@ -2909,6 +2960,7 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 	case "exec_command_begin":
 		callID, _ := msg["call_id"].(string)
 		command, _ := msg["command"].(string)
+		c.commandExecutionStarted(callID)
 		if c.onMessage != nil {
 			c.onMessage(Message{
 				Type:   MessageToolUse,
@@ -2920,6 +2972,7 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 	case "exec_command_end":
 		callID, _ := msg["call_id"].(string)
 		output, _ := msg["output"].(string)
+		c.commandExecutionCompleted(callID)
 		if c.onMessage != nil {
 			c.onMessage(Message{
 				Type:   MessageToolResult,
@@ -3097,6 +3150,7 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 	switch {
 	case method == "item/started" && itemType == "commandExecution":
 		command, _ := item["command"].(string)
+		c.commandExecutionStarted(itemID)
 		if c.onMessage != nil {
 			c.onMessage(Message{
 				Type:   MessageToolUse,
@@ -3108,6 +3162,7 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 
 	case method == "item/completed" && itemType == "commandExecution":
 		output, _ := item["aggregatedOutput"].(string)
+		c.commandExecutionCompleted(itemID)
 		if c.onMessage != nil {
 			c.onMessage(Message{
 				Type:   MessageToolResult,
