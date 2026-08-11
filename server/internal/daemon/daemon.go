@@ -26,6 +26,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/selfexec"
+	"github.com/multica-ai/multica/server/internal/taskcli"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/skillbundle"
@@ -365,6 +366,15 @@ type Daemon struct {
 	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
 	ready         atomic.Bool        // false until preflight completes; gates /health status (starting -> running)
 
+	// taskCLICapabilities maps an opaque, task-local capability to the raw task
+	// token and fixed execution context retained by the daemon. Provider
+	// processes receive the capability but never MULTICA_TOKEN, so every normal
+	// `multica ...` invocation can be brokered without exposing bearer auth to
+	// provider shells or tool bridges.
+	taskCLIMu            sync.Mutex
+	taskCLICapabilities  map[string]*taskCLICapability
+	taskCLICommandRunner taskCLICommandRunner // test seam; nil uses the real CLI subprocess
+
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
 	// the lock so a slow per-runtime claim cannot stall auto-update or any
@@ -463,6 +473,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		reconcile:                 newReconcileBroadcaster(),
 		workspaceChanges:          newWorkspaceChangeSignal(),
 		wsRPC:                     newWSRPCClient(wsRPCResponseGrace),
+		taskCLICapabilities:       make(map[string]*taskCLICapability),
 	}
 	d.activeEnvRootsCond = sync.NewCond(&d.activeEnvRootsMu)
 	d.activeCodexStoresCond = sync.NewCond(&d.activeCodexStoresMu)
@@ -5152,21 +5163,22 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	prompt := BuildPrompt(task, provider)
 
-	// Pass task-scoped auth credentials and context so the spawned agent CLI
-	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
+	// Pass task context so the spawned agent CLI can call the local daemon
+	// (e.g. `multica repo checkout`). The task-scoped API credential remains in
+	// the daemon-owned CLI broker registered below; provider environments get an
+	// opaque capability instead of a raw bearer token.
 	// MULTICA_TASK_SLOT is allocated from the daemon-wide concurrency pool, not
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
-	// MULTICA_TOKEN is bound to (agent, task) by the server. Never fall back
-	// to the daemon's own credential here: doing so lets agent CLI writes land
-	// as the runtime owner's member actor and can retrigger the same agent.
+	// The token is bound to (agent, task) by the server. Never fall back to the
+	// daemon's own credential here: doing so lets agent CLI writes land as the
+	// runtime owner's member actor and can retrigger the same agent.
 	agentToken, err := taskScopedAuthToken(task)
 	if err != nil {
 		taskLog.Error("task auth token invalid; refusing to start agent", "error", err)
 		return TaskResult{}, err
 	}
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":        agentToken,
 		"MULTICA_SERVER_URL":   d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":  fmt.Sprintf("%d", d.cfg.HealthPort),
 		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
@@ -5261,6 +5273,22 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		agentEnv["REASONIX_STATE_HOME"] = reasonixStateHome
 	}
+	taskCLICapability, releaseTaskCLI, err := d.registerTaskCLI(taskCLIRegistration{
+		ParentCtx:   ctx,
+		Token:       agentToken,
+		ServerURL:   d.cfg.ServerBaseURL,
+		WorkspaceID: task.WorkspaceID,
+		AgentID:     task.AgentID,
+		AgentName:   agentName,
+		TaskID:      task.ID,
+		WorkDir:     env.WorkDir,
+		Env:         agentEnv,
+	})
+	if err != nil {
+		return TaskResult{}, fmt.Errorf("register task CLI broker: %w", err)
+	}
+	defer releaseTaskCLI()
+	agentEnv[taskcli.CapabilityEnv] = taskCLICapability
 	if err := configureCodexTaskShellEnvironment(provider, env.CodexHome, os.Environ(), agentEnv, agentCustomEnv, d.logger); err != nil {
 		return TaskResult{}, err
 	}

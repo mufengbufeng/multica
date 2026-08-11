@@ -662,7 +662,7 @@ func writeAttachments(b *strings.Builder) {
 // (compressed).
 func writeAlwaysUseCLI(b *strings.Builder) {
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
-	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
+	b.WriteString("Access Multica platform resources only through the `multica` CLI — never `curl` / `wget`. Inside this task, normal `multica ...` commands use the daemon's task CLI channel automatically; do not supply `MULTICA_TOKEN` or fall back to stored user credentials. Run them from the task's native shell, not a Node/REPL/browser bridge or a hand-built isolated subprocess. The task channel permits runtime reads (`list`, `usage`, `activity`) but not runtime administration. If a command reports `task CLI channel is unavailable`, do not retry through another tool or remove `.multica/daemon_task_context.json`; report that exact error so the task runtime can be recreated. For anything the CLI doesn't cover, post a comment mentioning the workspace owner rather than working around it.\n\n")
 }
 
 // writeDeliveryInvariant emits the always-on delivery contract, shared by every

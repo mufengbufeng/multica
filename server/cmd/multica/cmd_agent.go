@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/taskcli"
 )
 
 var agentCmd = &cobra.Command{
@@ -269,6 +271,9 @@ func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
 			if markerPath := daemonTaskContextMarkerPath(); markerPath != "" {
 				return nil, fmt.Errorf("agent execution context requires MULTICA_TOKEN to be a task-scoped mat_ token; detected a daemon task marker at %s — if you are not running inside an agent task this is likely a leftover, remove it and retry", markerPath)
 			}
+		}
+		if strings.TrimSpace(os.Getenv(taskcli.CapabilityEnv)) == "" && os.Getenv(taskcli.BrokerExecEnv) == "" {
+			return nil, errors.New(taskCLIChannelUnavailableMessage)
 		}
 		return nil, fmt.Errorf("agent execution context requires MULTICA_TOKEN to be a task-scoped mat_ token")
 	}

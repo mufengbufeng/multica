@@ -177,7 +177,7 @@ if [ -d "$TMPDIR" ]; then
 else
   tmpdir_exists=no
 fi
-printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\nTMPDIR_EXISTS=%s\n' "$TMPDIR" "$TMP" "$TEMP" "$tmpdir_exists" > "$CAPTURE_FILE"
+printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\nTMPDIR_EXISTS=%s\nMULTICA_TOKEN=%s\nMULTICA_TASK_CLI_CAPABILITY=%s\n' "$TMPDIR" "$TMP" "$TEMP" "$tmpdir_exists" "$MULTICA_TOKEN" "$MULTICA_TASK_CLI_CAPABILITY" > "$CAPTURE_FILE"
 IFS= read -r _
 printf '%s\n' '{"type":"system","session_id":"sess-private-temp"}'
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-private-temp","result":"done"}'
@@ -259,6 +259,12 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 	}
 	if got["TMPDIR_EXISTS"] != "yes" {
 		t.Fatalf("fake agent saw TMPDIR_EXISTS=%q, want yes", got["TMPDIR_EXISTS"])
+	}
+	if got["MULTICA_TOKEN"] != "" {
+		t.Fatalf("provider environment exposed MULTICA_TOKEN=%q", got["MULTICA_TOKEN"])
+	}
+	if got["MULTICA_TASK_CLI_CAPABILITY"] == "" {
+		t.Fatal("provider environment is missing task CLI capability")
 	}
 	taskTempDir := got["TMPDIR"]
 	if strings.HasPrefix(taskTempDir, envRoot) {

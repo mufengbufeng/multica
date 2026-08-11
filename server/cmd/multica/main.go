@@ -105,6 +105,9 @@ func main() {
 		}
 		return
 	}
+	if proxied, exitCode := proxyTaskCLI(os.Args[1:], os.Stdout, os.Stderr); proxied {
+		os.Exit(exitCode)
+	}
 	cli.CleanupStaleUpdateArtifacts()
 	if err := rootCmd.Execute(); err != nil {
 		if err != errSilent {

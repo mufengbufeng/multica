@@ -483,8 +483,8 @@ func TestNewAPIClient_DaemonPortRequiresTaskToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("newAPIClient(): expected error without task token")
 	}
-	if !strings.Contains(err.Error(), "mat_ token") {
-		t.Fatalf("newAPIClient() error = %q, want mat_ token guidance", err.Error())
+	if !strings.Contains(err.Error(), "task CLI channel is unavailable") {
+		t.Fatalf("newAPIClient() error = %q, want task CLI channel guidance", err.Error())
 	}
 }
 

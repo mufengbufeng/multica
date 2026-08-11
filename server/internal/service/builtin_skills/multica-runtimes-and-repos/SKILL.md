@@ -49,6 +49,17 @@ multica repo checkout <url> --ref <branch-or-sha>
 
 `repo checkout` requires `MULTICA_DAEMON_PORT`; it is intended to run inside a daemon task. If absent, you are not in the normal agent checkout path. When a project `github_repo` resource has `resource_ref.ref`, `repo checkout <url>` uses that ref by default for the current task; an explicit `repo checkout <url> --ref <branch-or-sha>` overrides it.
 
+Inside a daemon task, normal `multica ...` commands are routed through a
+task-local CLI channel. The daemon keeps the task-scoped `mat_` token; do not
+try to inject a token, fall back to user credentials, or replace the task shell
+with a Node/REPL/browser bridge or an isolated subprocess. If the CLI reports
+`task CLI channel is unavailable`, preserve `.multica/daemon_task_context.json`
+and report the exact error so the task runtime can be recreated.
+
+The task channel permits `runtime list`, `runtime usage`, and `runtime activity`
+only. Run runtime administration outside an active agent task with the normal
+owner/admin authorization flow.
+
 ## Debugging an agent that did not run
 
 Check in this order:
@@ -70,7 +81,7 @@ Workspace repos and project resources are not the same thing:
 
 - workspace repo metadata can appear in workspace context;
 - `github_repo` project resources are durable project context and can affect future tasks; optional `resource_ref.ref` pins the default checkout ref for tasks in that project;
-- `local_directory` resources point at a path owned by a daemon and carry local-machine assumptions.
+- `local_directory` resources point at a path owned by a daemon and carry local-machine assumptions. A regular member may bind or move that path only when they own every runtime registered by that daemon; a workspace owner/admin may manage it. This prevents a separate provider runtime from being used to impersonate another machine.
 
 Do not add a project resource just because `repo checkout` failed. First determine whether the user asked for durable project context or just a task checkout.
 
