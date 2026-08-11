@@ -929,6 +929,64 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 }
 
+func TestDaemonRegister_RejectsForeignDaemonIdentityClaim(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	peerID := createRuntimeLocalSkillTestMember(t, "member")
+	claimantID := createRuntimeLocalSkillTestMember(t, "member")
+	const daemonID = "daemon-registration-peer-machine"
+
+	var peerRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, last_seen_at
+		)
+		VALUES ($1, $2, 'Peer machine', 'local', 'codex', 'online', '', '{}'::jsonb, $3, now())
+		RETURNING id
+	`, testWorkspaceID, daemonID, peerID).Scan(&peerRuntimeID); err != nil {
+		t.Fatalf("seed peer runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, peerRuntimeID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequestAs(claimantID, http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"runtimes": []map[string]any{
+			{"name": "Claim attempt", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	})
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("DaemonRegister foreign daemon claim: got %d, want 403: %s", w.Code, w.Body.String())
+	}
+
+	var ownerID string
+	if err := testPool.QueryRow(ctx, `SELECT owner_id FROM agent_runtime WHERE id = $1`, peerRuntimeID).Scan(&ownerID); err != nil {
+		t.Fatalf("read peer runtime owner: %v", err)
+	}
+	if ownerID != peerID {
+		t.Fatalf("peer runtime owner = %q, want %q", ownerID, peerID)
+	}
+
+	var claimantRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_runtime
+		WHERE workspace_id = $1 AND daemon_id = $2 AND owner_id = $3
+	`, testWorkspaceID, daemonID, claimantID).Scan(&claimantRows); err != nil {
+		t.Fatalf("count claimant runtimes: %v", err)
+	}
+	if claimantRows != 0 {
+		t.Fatalf("foreign daemon registration created %d claimant runtime rows", claimantRows)
+	}
+}
+
 func TestDaemonRegister_RecordsRuntimeProfileRegistrationFailure(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

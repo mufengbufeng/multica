@@ -378,6 +378,43 @@ func sharedDaemonCustomName(names []pgtype.Text) (string, bool) {
 	return first, true
 }
 
+// memberOwnsDaemonRegistration verifies a member is not claiming a daemon
+// identity already associated with somebody else's machine. daemon_id is a
+// machine identity shared by its provider runtime rows, so checking only the
+// row being upserted would let a member create another provider row and then
+// use it to nominate paths on a peer's computer.
+func (h *Handler) memberOwnsDaemonRegistration(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	daemonID string,
+	legacyDaemonIDs []string,
+) (bool, error) {
+	claimedDaemonIDs := map[string]struct{}{}
+	for _, candidate := range append([]string{daemonID}, legacyDaemonIDs...) {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate != "" {
+			claimedDaemonIDs[candidate] = struct{}{}
+		}
+	}
+
+	runtimes, err := h.Queries.ListAgentRuntimes(ctx, workspaceID)
+	if err != nil {
+		return false, err
+	}
+	for _, runtime := range runtimes {
+		if !runtime.DaemonID.Valid {
+			continue
+		}
+		if _, claimed := claimedDaemonIDs[strings.ToLower(strings.TrimSpace(runtime.DaemonID.String))]; !claimed {
+			continue
+		}
+		if !runtime.OwnerID.Valid || uuidToString(runtime.OwnerID) != uuidToString(userID) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	var req DaemonRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -407,14 +444,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	req.WorkspaceID = uuidToString(wsUUID)
 
-	// Verify workspace access and resolve owner.
-	// Daemon tokens (mdt_) prove workspace access directly; OwnerID will be zero
-	// (the SQL COALESCE preserves any existing owner on upsert).
-	// PAT/JWT tokens require a membership check and set OwnerID from the member.
+	// Verify workspace access and resolve owner. A daemon token is bound to one
+	// daemon_id as well as its workspace; PAT/JWT registrations establish or
+	// reconnect only to daemon identities already owned by that member.
 	var ownerID pgtype.UUID
 	if daemonWsID := middleware.DaemonWorkspaceIDFromContext(r.Context()); daemonWsID != "" {
 		if daemonWsID != req.WorkspaceID {
 			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		if daemonID := strings.TrimSpace(middleware.DaemonIDFromContext(r.Context())); daemonID == "" || daemonID != req.DaemonID {
+			writeError(w, http.StatusNotFound, "daemon not found")
 			return
 		}
 		// ownerID stays zero — COALESCE keeps the existing owner on upsert.
@@ -424,6 +464,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ownerID = member.UserID
+		ownsDaemon, err := h.memberOwnsDaemonRegistration(
+			r.Context(), wsUUID, member.UserID, req.DaemonID, req.LegacyDaemonIDs,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify daemon identity")
+			return
+		}
+		if !ownsDaemon {
+			writeError(w, http.StatusForbidden, "daemon_id is already registered to another member")
+			return
+		}
 	}
 
 	ws, err := h.Queries.GetWorkspace(r.Context(), wsUUID)
@@ -744,6 +795,11 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 		for _, old := range matches {
 			oldID := uuidToString(old.ID)
 			if oldID == newID {
+				continue
+			}
+			if old.OwnerID.Valid != registered.OwnerID.Valid ||
+				(old.OwnerID.Valid && uuidToString(old.OwnerID) != uuidToString(registered.OwnerID)) {
+				slog.Warn("legacy runtime merge: owner mismatch", "legacy_daemon_id", legacyID, "old_runtime_id", oldID, "new_runtime_id", newID)
 				continue
 			}
 			if _, seen := merged[oldID]; seen {
