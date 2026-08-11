@@ -308,6 +308,8 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	// surface, where there is no existing row to compare against yet.
 	normalizedRefs := make([]json.RawMessage, len(req.Resources))
 	localDirSeen := map[string]int{}
+	var localDirectoryMember db.Member
+	localDirectoryMemberLoaded := false
 	for i, res := range req.Resources {
 		res.ResourceType = strings.TrimSpace(res.ResourceType)
 		if res.ResourceType == "" {
@@ -319,8 +321,22 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "resources["+strconv.Itoa(i)+"]: "+err.Error())
 			return
 		}
-		normalizedRefs[i] = ref
 		if res.ResourceType == "local_directory" {
+			if !localDirectoryMemberLoaded {
+				var memberOK bool
+				localDirectoryMember, memberOK = h.workspaceMember(w, r, workspaceID)
+				if !memberOK {
+					return
+				}
+				localDirectoryMemberLoaded = true
+			}
+			ref, err = h.resolveLocalDirectoryRuntime(
+				r.Context(), wsUUID, localDirectoryMember, ref,
+			)
+			if err != nil {
+				writeLocalDirectoryRuntimeError(w, err, "resources["+strconv.Itoa(i)+"]: ")
+				return
+			}
 			var ld localDirectoryRef
 			if err := json.Unmarshal(ref, &ld); err != nil {
 				writeError(w, http.StatusBadRequest, "resources["+strconv.Itoa(i)+"]: "+err.Error())
@@ -332,6 +348,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 			}
 			localDirSeen[ld.DaemonID] = i
 		}
+		normalizedRefs[i] = ref
 	}
 
 	createParams := db.CreateProjectParams{

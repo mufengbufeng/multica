@@ -118,6 +118,9 @@ func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
 type localDirectoryRef struct {
 	LocalPath string `json:"local_path"`
 	DaemonID  string `json:"daemon_id"`
+	// RuntimeID is an input-only selector. The handler resolves it in the
+	// current workspace, authorizes the caller, and stores only daemon_id.
+	RuntimeID string `json:"runtime_id,omitempty"`
 	Label     string `json:"label,omitempty"`
 }
 
@@ -134,8 +137,9 @@ func validateLocalDirectoryRef(ref json.RawMessage) (json.RawMessage, error) {
 		return nil, errors.New("local_directory: local_path must be an absolute path")
 	}
 	payload.DaemonID = strings.TrimSpace(payload.DaemonID)
-	if payload.DaemonID == "" {
-		return nil, errors.New("local_directory: daemon_id is required")
+	payload.RuntimeID = strings.TrimSpace(payload.RuntimeID)
+	if payload.DaemonID == "" && payload.RuntimeID == "" {
+		return nil, errors.New("local_directory: daemon_id or runtime_id is required")
 	}
 	payload.Label = strings.TrimSpace(payload.Label)
 	out, err := json.Marshal(payload)
@@ -143,6 +147,148 @@ func validateLocalDirectoryRef(ref json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// localDirectoryRuntimeError is safe to return to callers. Everything else
+// from runtime resolution is an internal error and must not disclose details.
+type localDirectoryRuntimeError struct {
+	status  int
+	message string
+}
+
+func (e *localDirectoryRuntimeError) Error() string { return e.message }
+
+// canBindLocalDirectoryToDaemon treats daemon_id as a machine identity rather
+// than as an attribute of one runtime. A regular member must own every runtime
+// registered by that daemon; otherwise they could add a runtime with a peer's
+// daemon_id and use it to direct work into the peer's filesystem.
+func canBindLocalDirectoryToDaemon(member db.Member, runtimes []db.AgentRuntime, daemonID string) bool {
+	if roleAllowed(member.Role, "owner", "admin") {
+		return true
+	}
+
+	found := false
+	for _, runtime := range runtimes {
+		if !runtime.DaemonID.Valid || strings.TrimSpace(runtime.DaemonID.String) != daemonID {
+			continue
+		}
+		found = true
+		if !runtime.OwnerID.Valid || uuidToString(runtime.OwnerID) != uuidToString(member.UserID) {
+			return false
+		}
+	}
+	return found
+}
+
+func localDirectoryTargetMatches(existingRef, incomingRef json.RawMessage) bool {
+	var existing, incoming localDirectoryRef
+	if err := json.Unmarshal(existingRef, &existing); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(incomingRef, &incoming); err != nil {
+		return false
+	}
+	return strings.TrimSpace(existing.LocalPath) == strings.TrimSpace(incoming.LocalPath) &&
+		strings.TrimSpace(existing.DaemonID) == strings.TrimSpace(incoming.DaemonID)
+}
+
+func canonicalizeLocalDirectoryRef(ref json.RawMessage) (json.RawMessage, error) {
+	var payload localDirectoryRef
+	if err := json.Unmarshal(ref, &payload); err != nil {
+		return nil, err
+	}
+	payload.RuntimeID = ""
+	return json.Marshal(payload)
+}
+
+// resolveLocalDirectoryRuntime verifies that a local_directory target refers
+// to a local runtime in this workspace that the caller can edit. A browser
+// submits runtime_id so the server, rather than the client, chooses the
+// canonical daemon_id persisted in resource_ref. daemon_id-only payloads are
+// retained for installed desktop/CLI clients, but receive the same ownership
+// gate before they can nominate a filesystem path.
+func (h *Handler) resolveLocalDirectoryRuntime(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	member db.Member,
+	ref json.RawMessage,
+) (json.RawMessage, error) {
+	var payload localDirectoryRef
+	if err := json.Unmarshal(ref, &payload); err != nil {
+		return nil, fmt.Errorf("decode local_directory ref: %w", err)
+	}
+
+	runtimes, err := h.Queries.ListAgentRuntimes(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list local_directory runtimes: %w", err)
+	}
+
+	var runtime db.AgentRuntime
+	if payload.RuntimeID != "" {
+		var runtimeID pgtype.UUID
+		if err := runtimeID.Scan(payload.RuntimeID); err != nil {
+			return nil, &localDirectoryRuntimeError{
+				status:  http.StatusBadRequest,
+				message: "local_directory: runtime_id must be a valid UUID",
+			}
+		}
+		for _, candidate := range runtimes {
+			if uuidToString(candidate.ID) == uuidToString(runtimeID) {
+				runtime = candidate
+				break
+			}
+		}
+		if !runtime.ID.Valid {
+			return nil, &localDirectoryRuntimeError{
+				status:  http.StatusBadRequest,
+				message: "local_directory: runtime_id must identify a local runtime in this workspace",
+			}
+		}
+		if runtime.RuntimeMode != "local" || !runtime.DaemonID.Valid || strings.TrimSpace(runtime.DaemonID.String) == "" {
+			return nil, &localDirectoryRuntimeError{
+				status:  http.StatusBadRequest,
+				message: "local_directory: runtime_id must identify a local runtime in this workspace",
+			}
+		}
+	} else {
+		for _, candidate := range runtimes {
+			if candidate.RuntimeMode != "local" || !candidate.DaemonID.Valid || strings.TrimSpace(candidate.DaemonID.String) != payload.DaemonID {
+				continue
+			}
+			runtime = candidate
+			break
+		}
+		if !runtime.ID.Valid {
+			return nil, &localDirectoryRuntimeError{
+				status:  http.StatusBadRequest,
+				message: "local_directory: daemon_id must identify a local runtime in this workspace",
+			}
+		}
+	}
+
+	if !canEditRuntime(member, runtime) || !canBindLocalDirectoryToDaemon(member, runtimes, strings.TrimSpace(runtime.DaemonID.String)) {
+		return nil, &localDirectoryRuntimeError{
+			status:  http.StatusForbidden,
+			message: "local_directory: only the runtime owner or a workspace admin can attach this directory",
+		}
+	}
+
+	payload.DaemonID = strings.TrimSpace(runtime.DaemonID.String)
+	payload.RuntimeID = ""
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode local_directory ref: %w", err)
+	}
+	return canonical, nil
+}
+
+func writeLocalDirectoryRuntimeError(w http.ResponseWriter, err error, prefix string) {
+	var clientErr *localDirectoryRuntimeError
+	if errors.As(err, &clientErr) {
+		writeError(w, clientErr.status, prefix+clientErr.message)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "failed to resolve local directory runtime")
 }
 
 // isAbsoluteLocalPath checks the path looks absolute on either POSIX or
@@ -277,6 +423,19 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.ResourceType == "local_directory" {
+		member, ok := h.workspaceMember(w, r, uuidToString(project.WorkspaceID))
+		if !ok {
+			return
+		}
+		normalizedRef, err = h.resolveLocalDirectoryRuntime(
+			r.Context(), project.WorkspaceID, member, normalizedRef,
+		)
+		if err != nil {
+			writeLocalDirectoryRuntimeError(w, err, "")
+			return
+		}
+	}
 
 	if conflict, err := h.findLocalDirectoryConflict(r.Context(), project.ID, req.ResourceType, normalizedRef, pgtype.UUID{}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check existing resources")
@@ -376,6 +535,27 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		if existing.ResourceType == "local_directory" {
+			if localDirectoryTargetMatches(existing.ResourceRef, normalized) {
+				normalized, err = canonicalizeLocalDirectoryRef(normalized)
+				if err != nil {
+					writeError(w, http.StatusBadRequest, "invalid local_directory payload")
+					return
+				}
+			} else {
+				member, ok := h.workspaceMember(w, r, uuidToString(project.WorkspaceID))
+				if !ok {
+					return
+				}
+				normalized, err = h.resolveLocalDirectoryRuntime(
+					r.Context(), project.WorkspaceID, member, normalized,
+				)
+				if err != nil {
+					writeLocalDirectoryRuntimeError(w, err, "")
+					return
+				}
+			}
 		}
 		nextRef = normalized
 	}

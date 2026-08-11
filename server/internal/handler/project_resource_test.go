@@ -8,6 +8,35 @@ import (
 	"testing"
 )
 
+func createProjectResourceLocalRuntime(t *testing.T, daemonID, ownerID string) string {
+	t.Helper()
+	return createProjectResourceLocalRuntimeWithProvider(t, daemonID, ownerID, "codex")
+}
+
+func createProjectResourceLocalRuntimeWithProvider(
+	t *testing.T,
+	daemonID, ownerID, provider string,
+) string {
+	t.Helper()
+
+	var runtimeID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, last_seen_at
+		)
+		VALUES ($1, $2, 'Project resource local runtime', 'local', $3, 'online',
+			'Project resource test device', '{}'::jsonb, $4, now())
+		RETURNING id
+	`, testWorkspaceID, daemonID, provider, ownerID).Scan(&runtimeID); err != nil {
+		t.Fatalf("create local runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+	return runtimeID
+}
+
 func TestProjectResourceLifecycle(t *testing.T) {
 	// Create a project to attach resources to.
 	w := httptest.NewRecorder()
@@ -279,6 +308,7 @@ func TestProjectResourceLocalDirectoryLifecycle(t *testing.T) {
 		daemonID  = "daemon-aaaa-bbbb-cccc"
 		localPath = "/Users/foo/work/my-game"
 	)
+	createProjectResourceLocalRuntime(t, daemonID, testUserID)
 
 	// Happy path: attach local_directory resource with label.
 	w := httptest.NewRecorder()
@@ -460,6 +490,235 @@ func TestIsAbsoluteLocalPath(t *testing.T) {
 		if isAbsoluteLocalPath(s) {
 			t.Errorf("isAbsoluteLocalPath(%q) = true, want false", s)
 		}
+	}
+}
+
+// TestProjectResourceLocalDirectoryRuntimeAuthorization verifies that browser
+// clients select a runtime, not a daemon string they can forge. The server
+// derives the stored daemon_id and only lets the runtime owner or a workspace
+// owner/admin choose a local filesystem path on that machine.
+func TestProjectResourceLocalDirectoryRuntimeAuthorization(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Local directory runtime authorization",
+	})
+	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProject: %d %s", w.Code, w.Body.String())
+	}
+	var project ProjectResponse
+	if err := json.NewDecoder(w.Body).Decode(&project); err != nil {
+		t.Fatalf("decode CreateProject: %v", err)
+	}
+	t.Cleanup(func() {
+		r := newRequest("DELETE", "/api/projects/"+project.ID, nil)
+		r = withURLParam(r, "id", project.ID)
+		testHandler.DeleteProject(httptest.NewRecorder(), r)
+	})
+
+	const ownerDaemonID = "project-resource-owner-daemon"
+	ownerRuntimeID := createProjectResourceLocalRuntime(t, ownerDaemonID, testUserID)
+
+	// A runtime selector wins over the client-provided daemon_id, so the row
+	// cannot be redirected to another machine by swapping that string.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "local_directory",
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/owned",
+			"daemon_id":  "untrusted-daemon-id",
+			"runtime_id": ownerRuntimeID,
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create with runtime_id: %d %s", w.Code, w.Body.String())
+	}
+	var created ProjectResourceResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created resource: %v", err)
+	}
+	var createdRef localDirectoryRef
+	if err := json.Unmarshal(created.ResourceRef, &createdRef); err != nil {
+		t.Fatalf("decode created ref: %v", err)
+	}
+	if createdRef.DaemonID != ownerDaemonID || createdRef.RuntimeID != "" {
+		t.Fatalf("stored ref = %+v, want canonical daemon %q with no runtime_id", createdRef, ownerDaemonID)
+	}
+
+	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
+	runtimeOwnerID := createRuntimeLocalSkillTestMember(t, "member")
+	foreignRuntimeID := createProjectResourceLocalRuntime(
+		t, "project-resource-foreign-daemon", runtimeOwnerID,
+	)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET visibility = 'public' WHERE id = $1
+	`, foreignRuntimeID); err != nil {
+		t.Fatalf("make foreign runtime public: %v", err)
+	}
+
+	// Public means the runtime can run agents for other members; it does not
+	// give those members authority to direct arbitrary paths on its computer.
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, "POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "local_directory",
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/foreign",
+			"daemon_id":  "project-resource-foreign-daemon",
+			"runtime_id": foreignRuntimeID,
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("plain member create on public foreign runtime: got %d, want 403: %s", w.Code, w.Body.String())
+	}
+
+	// daemon_id identifies the computer, not one provider row on it. A member
+	// must not be able to add a second provider runtime under a peer's daemon
+	// and use that row to nominate arbitrary paths on the peer's machine.
+	const sharedDaemonID = "project-resource-shared-daemon"
+	createProjectResourceLocalRuntime(t, sharedDaemonID, runtimeOwnerID)
+	spoofedRuntimeID := createProjectResourceLocalRuntimeWithProvider(
+		t, sharedDaemonID, plainMemberID, "claude",
+	)
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, "POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "local_directory",
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/spoofed",
+			"daemon_id":  sharedDaemonID,
+			"runtime_id": spoofedRuntimeID,
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("plain member create on a mixed-owner daemon: got %d, want 403: %s", w.Code, w.Body.String())
+	}
+
+	// Bundled project creation must run the same gate before it opens the
+	// create transaction. Otherwise a browser could bypass the resource API by
+	// adding the local directory in the project-create payload.
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, "POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Unauthorized bundled local directory",
+		"resources": []map[string]any{
+			{
+				"resource_type": "local_directory",
+				"resource_ref": map[string]any{
+					"local_path": "/Users/foo/work/bundled-foreign",
+					"daemon_id":  "project-resource-foreign-daemon",
+					"runtime_id": foreignRuntimeID,
+				},
+			},
+		},
+	})
+	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("plain member bundled create on public foreign runtime: got %d, want 403: %s", w.Code, w.Body.String())
+	}
+
+	// Moving an existing directory repeats the gate. A label-only update stays
+	// allowed because it cannot change what directory any daemon receives.
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, "PUT", "/api/projects/"+project.ID+"/resources/"+created.ID, map[string]any{
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/moved",
+			"daemon_id":  "project-resource-foreign-daemon",
+			"runtime_id": foreignRuntimeID,
+		},
+	})
+	req = withURLParams(req, "id", project.ID, "resourceId", created.ID)
+	testHandler.UpdateProjectResource(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("plain member move onto public foreign runtime: got %d, want 403: %s", w.Code, w.Body.String())
+	}
+
+	// The resource owner can replace the directory in place. The daemon target
+	// stays the same, but a new absolute path is independently authorized.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/projects/"+project.ID+"/resources/"+created.ID, map[string]any{
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/replaced",
+			"daemon_id":  ownerDaemonID,
+			"runtime_id": ownerRuntimeID,
+			"label":      "Replacement",
+		},
+	})
+	req = withURLParams(req, "id", project.ID, "resourceId", created.ID)
+	testHandler.UpdateProjectResource(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner replacement update: got %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var replaced ProjectResourceResponse
+	if err := json.NewDecoder(w.Body).Decode(&replaced); err != nil {
+		t.Fatalf("decode replaced resource: %v", err)
+	}
+	var replacedRef localDirectoryRef
+	if err := json.Unmarshal(replaced.ResourceRef, &replacedRef); err != nil {
+		t.Fatalf("decode replaced ref: %v", err)
+	}
+	if replacedRef.LocalPath != "/Users/foo/work/replaced" || replacedRef.DaemonID != ownerDaemonID {
+		t.Fatalf("replaced ref = %+v, want canonical owner daemon and replacement path", replacedRef)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, "PUT", "/api/projects/"+project.ID+"/resources/"+created.ID, map[string]any{
+		"label": "renamed by member",
+	})
+	req = withURLParams(req, "id", project.ID, "resourceId", created.ID)
+	testHandler.UpdateProjectResource(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("label-only update: got %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	// Installed CLI clients resend the full resource_ref when editing the
+	// embedded label. This must remain a label-only update when path and daemon
+	// are unchanged; requiring runtime ownership here would reject a harmless
+	// display-name change.
+	w = httptest.NewRecorder()
+	req = newRequestAs(plainMemberID, "PUT", "/api/projects/"+project.ID+"/resources/"+created.ID, map[string]any{
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/replaced",
+			"daemon_id":  ownerDaemonID,
+			"label":      "renamed in resource ref",
+		},
+	})
+	req = withURLParams(req, "id", project.ID, "resourceId", created.ID)
+	testHandler.UpdateProjectResource(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("embedded label-only update: got %d, want 200: %s", w.Code, w.Body.String())
+	} else {
+		var updated ProjectResourceResponse
+		if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+			t.Errorf("decode embedded label update: %v", err)
+		} else {
+			var updatedRef localDirectoryRef
+			if err := json.Unmarshal(updated.ResourceRef, &updatedRef); err != nil {
+				t.Errorf("decode embedded label resource ref: %v", err)
+			} else if updatedRef.Label != "renamed in resource ref" {
+				t.Errorf("embedded label = %q, want renamed in resource ref", updatedRef.Label)
+			}
+		}
+	}
+
+	// An otherwise valid but absent runtime identifier is a caller error, not
+	// a path binding against an arbitrary daemon string.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "local_directory",
+		"resource_ref": map[string]any{
+			"local_path": "/Users/foo/work/missing",
+			"daemon_id":  "does-not-matter",
+			"runtime_id": "00000000-0000-0000-0000-000000000000",
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("unknown runtime id: got %d, want 400: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -718,6 +977,8 @@ func TestProjectResourceUpdateLifecycle(t *testing.T) {
 		r = withURLParam(r, "id", project.ID)
 		testHandler.DeleteProject(httptest.NewRecorder(), r)
 	}()
+	createProjectResourceLocalRuntime(t, "d1", testUserID)
+	createProjectResourceLocalRuntime(t, "d2", testUserID)
 
 	// Seed one local_directory resource we will mutate.
 	w = httptest.NewRecorder()
@@ -866,6 +1127,8 @@ func TestProjectResourceLocalDirectoryDaemonScopedConflict(t *testing.T) {
 		otherDaemon = "d-other"
 		localPath   = "/Users/foo/work/scoped"
 	)
+	createProjectResourceLocalRuntime(t, daemonID, testUserID)
+	createProjectResourceLocalRuntime(t, otherDaemon, testUserID)
 
 	// First attach succeeds.
 	w = httptest.NewRecorder()
@@ -982,6 +1245,9 @@ func TestProjectResourceLocalDirectoryDaemonScopedConflict(t *testing.T) {
 // with different labels, or different paths on the same daemon — must
 // reject with 400 before any DB work.
 func TestCreateProjectBundledLocalDirectoryDaemonConflict(t *testing.T) {
+	createProjectResourceLocalRuntime(t, "d-bundle", testUserID)
+	createProjectResourceLocalRuntime(t, "d-bundle-1", testUserID)
+	createProjectResourceLocalRuntime(t, "d-bundle-2", testUserID)
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
 		"title": "Bundled label shadow",

@@ -29,7 +29,7 @@ A project's `description` is also durable context: when an issue (or a quick-cre
 Common resource types:
 
 - `github_repo` — durable GitHub repo context, with `resource_ref.url`, optional checkout `ref`, and optional prompt-only `default_branch_hint`;
-- `local_directory` — daemon-local path context, with `resource_ref.local_path`, `daemon_id`, and optional label.
+- `local_directory` — daemon-local path context, with `resource_ref.local_path`, `daemon_id`, and optional label. Browser/API clients may also send `runtime_id`; the server resolves the canonical daemon. A regular member may nominate a path only when they own every runtime sharing that daemon identity; workspace owners/admins retain the administrative override. Updating a label while the canonical path and daemon are unchanged does not require that path authorization.
 
 ## CLI
 
