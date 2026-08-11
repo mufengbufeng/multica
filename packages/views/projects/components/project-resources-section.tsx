@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
   FolderGit,
   FolderOpen,
+  FolderPen,
+  Monitor,
   Pencil,
   Plus,
   Search,
@@ -20,7 +22,10 @@ import {
 } from "@multica/core/projects";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
+import { useCurrentMember } from "@multica/core/permissions";
+import { runtimeListOptions } from "@multica/core/runtimes";
 import type {
+  AgentRuntime,
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
   ProjectResource,
@@ -45,6 +50,12 @@ import {
 } from "../../platform";
 import { useT } from "../../i18n";
 import { githubShortLabel } from "../../common/github-url";
+import {
+  LocalDirectoryDialog,
+  type LocalDirectoryMachine,
+  type LocalDirectoryDialogValue,
+} from "./local-directory-dialog";
+import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 
 // Project Resources sidebar section.
 //
@@ -64,28 +75,38 @@ function isLocalDirectoryRef(r: ProjectResource): r is ProjectResource & {
   return r.resource_type === "local_directory";
 }
 
+type LocalDirectoryProjectResource = ProjectResource & {
+  resource_ref: LocalDirectoryResourceRef;
+};
+
 export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const workspace = useCurrentWorkspace();
+  const currentMember = useCurrentMember(wsId);
+  const currentUserId = currentMember.userId ?? undefined;
   const daemonStatus = useLocalDaemonStatus();
+  const desktopMode = isDesktopShell();
   const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [localDialogOpen, setLocalDialogOpen] = useState(false);
+  const [replacementResource, setReplacementResource] =
+    useState<LocalDirectoryProjectResource | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [picking, setPicking] = useState(false);
 
   const { data: resources = [] } = useQuery(
     projectResourcesOptions(wsId, projectId),
   );
+  const {
+    data: runtimes = [],
+    isLoading: runtimesLoading,
+    isError: runtimesLoadFailed,
+  } = useQuery(runtimeListOptions(wsId));
   const createResource = useCreateProjectResource(wsId, projectId);
   const updateResource = useUpdateProjectResource(wsId, projectId);
   const deleteResource = useDeleteProjectResource(wsId, projectId);
 
-  // Desktop-only entry points. We hide (not just disable) on web so users
-  // there don't see an action they can never complete — the spec calls for
-  // read-only on web because the daemon-id check can't be performed in the
-  // browser.
-  const desktopMode = isDesktopShell();
   const localDaemonId = daemonStatus.daemonId;
 
   const attachedUrls = new Set(
@@ -97,6 +118,83 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       .filter((r) => r.resource_ref.daemon_id === localDaemonId)
       .map((r) => r.resource_ref.local_path),
   );
+  const attachedLocalDaemonIds = useMemo(
+    () =>
+      new Set(
+        resources
+          .filter(isLocalDirectoryRef)
+          .map((resource) => resource.resource_ref.daemon_id),
+      ),
+    [resources],
+  );
+  const isWorkspaceAdmin =
+    currentMember.role === "owner" || currentMember.role === "admin";
+  const localRuntimeMachines = useMemo(
+    () =>
+      buildRuntimeMachines(
+        runtimes.filter(
+          (runtime) =>
+            runtime.runtime_mode === "local" && runtime.daemon_id !== null,
+        ),
+        { now: Date.now(), currentUserId },
+      ).flatMap((machine) => {
+        if (machine.mode !== "local" || !machine.daemonId) return [];
+        return [
+          {
+            daemonId: machine.daemonId,
+            title: machine.title,
+            subtitle: machine.subtitle,
+            online: machine.onlineCount > 0,
+            runtimes: machine.runtimes,
+          },
+        ];
+      }),
+    [currentUserId, runtimes],
+  );
+  const localMachines = useMemo<LocalDirectoryMachine[]>(
+    () =>
+      localRuntimeMachines.flatMap((machine) => {
+        const runtime = machine.runtimes.find((candidate) =>
+          canManageLocalRuntime(candidate, currentUserId, isWorkspaceAdmin),
+        );
+        if (!runtime) return [];
+        return [
+          {
+            runtimeId: runtime.id,
+            daemonId: machine.daemonId,
+            title: machine.title,
+            subtitle: machine.subtitle,
+            online: machine.online,
+          },
+        ];
+      }),
+    [currentUserId, isWorkspaceAdmin, localRuntimeMachines],
+  );
+  const localMachineByDaemonId = useMemo(
+    () =>
+      new Map(
+        localRuntimeMachines.map((machine) => [
+          machine.daemonId,
+          {
+            runtimeId: machine.runtimes[0]?.id ?? "",
+            daemonId: machine.daemonId,
+            title: machine.title,
+            subtitle: machine.subtitle,
+            online: machine.online,
+          },
+        ]),
+      ),
+    [localRuntimeMachines],
+  );
+  const localRuntimeId = localMachines.find(
+    (machine) => machine.daemonId === localDaemonId,
+  )?.runtimeId;
+  const replacementAttachedDaemonIds = useMemo(() => {
+    if (!replacementResource) return attachedLocalDaemonIds;
+    const daemonIds = new Set(attachedLocalDaemonIds);
+    daemonIds.delete(replacementResource.resource_ref.daemon_id);
+    return daemonIds;
+  }, [attachedLocalDaemonIds, replacementResource]);
   // Per (project, daemon) we allow at most one local_directory — the
   // daemon-side resolver picks the first match by daemon_id, so two rows
   // on the same daemon would silently route the agent into one of them.
@@ -105,7 +203,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   // current daemon, otherwise users would only discover the limit on a
   // 409 toast.
   const hasLocalDirectoryForCurrentDaemon =
-    localDaemonId !== null && attachedLocalPaths.size > 0;
+    localDaemonId !== null && attachedLocalDaemonIds.has(localDaemonId);
 
   const repoQuery = repoSearch.trim().toLowerCase();
   const filteredRepos =
@@ -174,6 +272,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
         resource_ref: {
           local_path: path,
           daemon_id: localDaemonId,
+          ...(localRuntimeId ? { runtime_id: localRuntimeId } : {}),
           label: fallbackLabel,
         },
       });
@@ -187,6 +286,139 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       toast.error(msg);
     } finally {
       setPicking(false);
+    }
+  };
+
+  const handleReplaceLocalDirectory = async (
+    resource: LocalDirectoryProjectResource,
+  ) => {
+    if (picking) return;
+    setPicking(true);
+    try {
+      if (
+        !localDaemonId ||
+        !daemonStatus.running ||
+        resource.resource_ref.daemon_id !== localDaemonId
+      ) {
+        toast.error(t(($) => $.resources.toast_local_daemon_not_running));
+        return;
+      }
+      const picked = await pickDirectory();
+      if (!picked.ok) {
+        if (picked.reason && picked.reason !== "cancelled") {
+          toast.error(
+            picked.error ?? t(($) => $.resources.toast_local_pick_failed),
+          );
+        }
+        return;
+      }
+      const path = picked.path ?? "";
+      if (path === resource.resource_ref.local_path) return;
+      const validation = await validateLocalDirectory(path);
+      if (!validation.ok) {
+        toast.error(
+          localValidationMessage(validation, {
+            not_absolute: t(($) => $.resources.local_validate_not_absolute),
+            not_found: t(($) => $.resources.local_validate_not_found),
+            not_a_directory: t(($) => $.resources.local_validate_not_a_directory),
+            not_readable: t(($) => $.resources.local_validate_not_readable),
+            not_writable: t(($) => $.resources.local_validate_not_writable),
+            unsupported: t(($) => $.resources.local_validate_unsupported),
+            fallback: t(($) => $.resources.toast_local_pick_failed),
+          }),
+        );
+        return;
+      }
+      await updateResource.mutateAsync({
+        resourceId: resource.id,
+        data: {
+          resource_ref: {
+            local_path: path,
+            daemon_id: resource.resource_ref.daemon_id,
+            ...(localRuntimeId ? { runtime_id: localRuntimeId } : {}),
+            label: picked.basename ?? path,
+          },
+        },
+      });
+      toast.success(t(($) => $.resources.toast_local_replaced));
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.resources.toast_local_replace_failed),
+      );
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const handleAttachBrowserLocalDirectory = async ({
+    runtimeId,
+    daemonId,
+    localPath,
+    label,
+  }: LocalDirectoryDialogValue): Promise<boolean> => {
+    if (attachedLocalDaemonIds.has(daemonId)) {
+      toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
+      return false;
+    }
+    try {
+      await createResource.mutateAsync({
+        resource_type: "local_directory",
+        resource_ref: {
+          local_path: localPath,
+          daemon_id: daemonId,
+          runtime_id: runtimeId,
+          label,
+        },
+      });
+      toast.success(t(($) => $.resources.toast_local_attached));
+      return true;
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.resources.toast_local_pick_failed),
+      );
+      return false;
+    }
+  };
+
+  const handleReplaceBrowserLocalDirectory = async ({
+    runtimeId,
+    daemonId,
+    localPath,
+    label,
+  }: LocalDirectoryDialogValue): Promise<boolean> => {
+    if (!replacementResource) return false;
+    if (
+      daemonId !== replacementResource.resource_ref.daemon_id &&
+      attachedLocalDaemonIds.has(daemonId)
+    ) {
+      toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
+      return false;
+    }
+    try {
+      await updateResource.mutateAsync({
+        resourceId: replacementResource.id,
+        data: {
+          resource_ref: {
+            local_path: localPath,
+            daemon_id: daemonId,
+            runtime_id: runtimeId,
+            label,
+          },
+        },
+      });
+      toast.success(t(($) => $.resources.toast_local_replaced));
+      return true;
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.resources.toast_local_replace_failed),
+      );
+      return false;
     }
   };
 
@@ -256,9 +488,30 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   key={resource.id}
                   resource={resource}
                   localDaemonId={localDaemonId}
-                  canEdit={desktopMode}
+                  canEdit={
+                    desktopMode ||
+                    (isLocalDirectoryRef(resource) &&
+                      localMachines.some(
+                        (machine) =>
+                          machine.daemonId === resource.resource_ref.daemon_id,
+                      ))
+                  }
+                  showLocalAvailability={desktopMode}
+                  machine={localMachineByDaemonId.get(
+                    isLocalDirectoryRef(resource)
+                      ? resource.resource_ref.daemon_id
+                      : "",
+                  )}
                   onRemove={() => handleRemove(resource)}
                   onRenameLocalDirectory={handleRenameLocalDirectory}
+                  onReplaceLocalDirectory={
+                    desktopMode
+                      ? handleReplaceLocalDirectory
+                      : (localResource) => {
+                          setReplacementResource(localResource);
+                          setLocalDialogOpen(true);
+                        }
+                  }
                 />
               ))}
             </div>
@@ -351,7 +604,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               />
             </PopoverContent>
           </Popover>
-          {desktopMode && (
+          {desktopMode ? (
             <div className="flex flex-col">
               <Button
                 variant="ghost"
@@ -381,30 +634,78 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 </p>
               )}
             </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 justify-start px-2 text-caption text-muted-foreground hover:text-foreground"
+              disabled={createResource.isPending}
+              onClick={() => {
+                setReplacementResource(null);
+                setLocalDialogOpen(true);
+              }}
+            >
+              <FolderOpen className="size-3" />
+              {t(($) => $.resources.add_local_directory_button)}
+            </Button>
           )}
+          <LocalDirectoryDialog
+            open={localDialogOpen}
+            onOpenChange={(next) => {
+              setLocalDialogOpen(next);
+              if (!next) setReplacementResource(null);
+            }}
+            machines={localMachines}
+            attachedDaemonIds={replacementAttachedDaemonIds}
+            mode={replacementResource ? "replace" : "attach"}
+            initialDaemonId={replacementResource?.resource_ref.daemon_id}
+            initialLocalPath={replacementResource?.resource_ref.local_path}
+            loading={runtimesLoading || currentMember.isLoading}
+            loadFailed={runtimesLoadFailed || currentMember.isError}
+            submitting={createResource.isPending || updateResource.isPending}
+            onSubmit={
+              replacementResource
+                ? handleReplaceBrowserLocalDirectory
+                : handleAttachBrowserLocalDirectory
+            }
+          />
         </div>
       )}
     </div>
   );
 }
 
+function canManageLocalRuntime(
+  runtime: AgentRuntime,
+  currentUserId: string | undefined,
+  isWorkspaceAdmin: boolean,
+): boolean {
+  return isWorkspaceAdmin || (!!currentUserId && runtime.owner_id === currentUserId);
+}
+
 interface ResourceRowProps {
   resource: ProjectResource;
   localDaemonId: string | null;
   canEdit: boolean;
+  showLocalAvailability: boolean;
+  machine: LocalDirectoryMachine | undefined;
   onRemove: () => void;
   onRenameLocalDirectory: (
-    resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef },
+    resource: LocalDirectoryProjectResource,
     nextLabel: string,
   ) => Promise<void>;
+  onReplaceLocalDirectory: (resource: LocalDirectoryProjectResource) => void;
 }
 
 function ResourceRow({
   resource,
   localDaemonId,
   canEdit,
+  showLocalAvailability,
+  machine,
   onRemove,
   onRenameLocalDirectory,
+  onReplaceLocalDirectory,
 }: ResourceRowProps) {
   const { t } = useT("projects");
   if (isGithubRef(resource)) {
@@ -447,8 +748,11 @@ function ResourceRow({
         resource={resource}
         localDaemonId={localDaemonId}
         canEdit={canEdit}
+        showLocalAvailability={showLocalAvailability}
+        machine={machine}
         onRemove={onRemove}
         onRename={onRenameLocalDirectory}
+        onReplace={onReplaceLocalDirectory}
       />
     );
   }
@@ -471,33 +775,41 @@ function ResourceRow({
 }
 
 interface LocalDirectoryRowProps {
-  resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef };
+  resource: LocalDirectoryProjectResource;
   localDaemonId: string | null;
   canEdit: boolean;
+  showLocalAvailability: boolean;
+  machine: LocalDirectoryMachine | undefined;
   onRemove: () => void;
   onRename: (
-    resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef },
+    resource: LocalDirectoryProjectResource,
     nextLabel: string,
   ) => Promise<void>;
+  onReplace: (resource: LocalDirectoryProjectResource) => void;
 }
 
 function LocalDirectoryRow({
   resource,
   localDaemonId,
   canEdit,
+  showLocalAvailability,
+  machine,
   onRemove,
   onRename,
+  onReplace,
 }: LocalDirectoryRowProps) {
   const { t } = useT("projects");
   const ref = resource.resource_ref;
   const display = (ref.label || resource.label || ref.local_path).trim() ||
     ref.local_path;
   const isForeignDaemon =
-    localDaemonId !== null && ref.daemon_id !== localDaemonId;
-  const isLocalUnknown = localDaemonId === null;
+    showLocalAvailability &&
+    localDaemonId !== null &&
+    ref.daemon_id !== localDaemonId;
+  const isLocalUnknown = showLocalAvailability && localDaemonId === null;
   // "disabled" in the spec sense — visual de-emphasis + no chat hint, and
-  // rename is hidden on foreign / unknown-daemon rows because the label
-  // belongs to the owning device. Delete stays available so the user can
+  // edit actions are hidden on foreign / unknown-daemon rows because the label
+  // and path belong to the owning device. Delete stays available so the user can
   // drop a stale registration from any device.
   const mismatch = isForeignDaemon || isLocalUnknown;
 
@@ -546,12 +858,21 @@ function LocalDirectoryRow({
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="truncate flex-1">{display}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{display}</span>
+                {machine && (
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1 text-micro text-muted-foreground">
+                    <Monitor className="size-2.5 shrink-0" />
+                    <span className="truncate">{machine.title}</span>
+                  </span>
+                )}
+              </span>
             }
           />
           <TooltipContent side="top">
             <div className="space-y-0.5 text-micro">
               <div className="font-mono">{ref.local_path}</div>
+              {machine && <div>{machine.title}</div>}
               {mismatch && (
                 <div className="text-muted-foreground">
                   {isLocalUnknown
@@ -562,6 +883,16 @@ function LocalDirectoryRow({
             </div>
           </TooltipContent>
         </Tooltip>
+      )}
+      {canEdit && !mismatch && !editing && (
+        <button
+          type="button"
+          onClick={() => onReplace(resource)}
+          className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+          title={t(($) => $.resources.local_replace_tooltip)}
+        >
+          <FolderPen className="size-3 text-muted-foreground" />
+        </button>
       )}
       {canEdit && !mismatch && !editing && (
         <button

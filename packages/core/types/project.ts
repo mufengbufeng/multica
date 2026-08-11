@@ -63,7 +63,8 @@ export interface ListProjectsResponse {
 // Known types (UI must default-case unknown server-side additions):
 //   - github_repo: cloud-side git checkout, ref = { url, ref?, default_branch_hint? }
 //   - local_directory: in-place agent execution on a specific daemon,
-//     ref = { local_path, daemon_id, label? }
+//     ref = { local_path, daemon_id, label? }. Create/update requests may
+//     additionally carry runtime_id; the server resolves and strips it.
 export type ProjectResourceType = "github_repo" | "local_directory";
 
 export interface GithubRepoResourceRef {
@@ -78,9 +79,21 @@ export interface LocalDirectoryResourceRef {
   label?: string;
 }
 
+export interface LocalDirectoryResourceInputRef
+  extends LocalDirectoryResourceRef {
+  // Input-only selector for browser clients. The server resolves it within the
+  // workspace, verifies permission, and persists the canonical daemon_id.
+  runtime_id?: string;
+}
+
 export type ProjectResourceRef =
   | GithubRepoResourceRef
   | LocalDirectoryResourceRef
+  | Record<string, unknown>;
+
+export type ProjectResourceInputRef =
+  | GithubRepoResourceRef
+  | LocalDirectoryResourceInputRef
   | Record<string, unknown>;
 
 export interface ProjectResource {
@@ -97,7 +110,7 @@ export interface ProjectResource {
 
 export interface CreateProjectResourceRequest {
   resource_type: ProjectResourceType;
-  resource_ref: ProjectResourceRef;
+  resource_ref: ProjectResourceInputRef;
   label?: string;
   position?: number;
 }
@@ -106,7 +119,7 @@ export interface CreateProjectResourceRequest {
 // Sending only the field(s) you want to change is fine — the server merges
 // the request body with the existing row, including resource_ref shortcuts.
 export interface UpdateProjectResourceRequest {
-  resource_ref?: ProjectResourceRef;
+  resource_ref?: ProjectResourceInputRef;
   label?: string | null;
   position?: number;
 }
