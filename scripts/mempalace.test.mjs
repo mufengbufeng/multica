@@ -207,10 +207,9 @@ test("the dependency lock check is local and rejects missing or drifted locks", 
 });
 
 test("the frozen lock contains uvicorn standard dependencies for Python 3.12", async () => {
-  const lock = await readFile(
-    join(repositoryRoot, "tools", "mempalace", "uv.lock"),
-    "utf8",
-  );
+  const lock = (
+    await readFile(join(repositoryRoot, "tools", "mempalace", "uv.lock"), "utf8")
+  ).replaceAll("\r\n", "\n");
   for (const [name, version] of [
     ["httptools", "0.7.1"],
     ["uvicorn", "0.44.0"],
@@ -307,7 +306,7 @@ test("the checked-in mining policy excludes secrets, task context, and generated
   }
   await writeFile(
     join(root, "mempalace.yaml"),
-    template.replace('  - ".env*"\n', ""),
+    template.replace(/  - "\.env\*"\r?\n/, ""),
   );
   await assert.rejects(verifyMiningPolicy(paths), /required mining exclusion/);
 });
