@@ -1,0 +1,50 @@
+# Project-local codedb-mcp configuration for Multica's JavaScript and
+# TypeScript sources. codebase-mcp 0.5.0 does not parse Go, so server/ is
+# intentionally outside this index rather than being silently under-indexed.
+
+[scan]
+extensions = ["js", "jsx", "mjs", "cjs", "ts", "tsx"]
+max_file_bytes = 50000000
+respect_gitignore = true
+# Scan the repository so root-level JS/TS configuration files are included.
+# The extension allow-list and ignored/generated directories keep this scoped.
+root_paths = []
+include_paths = []
+exclude_paths = []
+skip_dirs = [
+  ".git",
+  ".hg",
+  ".svn",
+  ".vs",
+  ".idea",
+  "node_modules",
+  "target",
+  "dist",
+  ".turbo",
+  ".next",
+  ".expo",
+  ".svelte-kit",
+  "coverage",
+  "out",
+  "build",
+  "dist-electron",
+  ".codedb-mcp",
+]
+
+[diagnostics]
+timing = false
+slow_file_ms = 0
+
+[logging]
+enabled = false
+file = ".codedb-mcp/codedb-mcp.log"
+queue_capacity = 8192
+flush_interval_ms = 500
+
+[watch]
+enabled = true
+poll_interval_seconds = 5
+
+[storage]
+enabled = true
+dir = ".codedb-mcp"

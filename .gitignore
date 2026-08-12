@@ -56,6 +56,11 @@ apps/web/test-results/
 .agent_context/
 .multica/
 
+# codedb-mcp keeps its downloaded runtime and generated index beside the
+# project-level scan configuration.
+.codedb-mcp/*
+!.codedb-mcp/codedb-mcp.toml
+
 # local settings
 .claude/
 .tool-versions
@@ -78,3 +83,8 @@ data/
 # Python (agent tooling)
 __pycache__/
 *.pyc
+
+# Project-local MemPalace runtime and generated configuration
+.mempalace-local/
+mempalace.yaml
+entities.json

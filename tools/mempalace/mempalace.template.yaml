@@ -1,0 +1,31 @@
+wing: multica
+rooms:
+  - name: decisions
+    description: Confirmed architecture and product decisions
+    keywords: [decision, adr, architecture, constraint]
+  - name: implementation
+    description: Verified implementation outcomes and code context
+    keywords: [implementation, code, test, result]
+  - name: operations
+    description: Confirmed development and operational constraints
+    keywords: [operation, workflow, runtime, deployment]
+exclude_patterns:
+  - ".env*"
+  - ".multica*"
+  - ".multica/"
+  - ".multica-*"
+  - ".context/"
+  - ".agent_context/"
+  - ".mempalace-local/"
+  - "node_modules/"
+  - ".turbo/"
+  - ".next/"
+  - "dist/"
+  - "dist-electron/"
+  - "build/"
+  - "out/"
+  - "coverage/"
+  - "test-results/"
+  - "server/bin/"
+  - "server/tmp/"
+  - "*.log"

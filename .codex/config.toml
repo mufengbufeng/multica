@@ -1,0 +1,52 @@
+[mcp_servers.mempalace]
+command = "node"
+args = [
+  "--eval",
+  'const fs=require("node:fs");const path=require("node:path");const url=require("node:url");let root=process.cwd();while(!(fs.existsSync(path.join(root,".git"))&&fs.existsSync(path.join(root,"package.json")))){const parent=path.dirname(root);if(parent===root){console.error("mempalace: could not find the Multica Git root");process.exit(1)}root=parent}process.chdir(root);const script=path.join(root,"scripts","mempalace.mjs");process.argv=[process.argv[0],script,"mcp"];import(url.pathToFileURL(script).href);',
+]
+enabled = true
+required = false
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+enabled_tools = [
+  "mempalace_status",
+  "mempalace_search",
+  "mempalace_list_wings",
+  "mempalace_list_rooms",
+  "mempalace_get_drawer",
+  "mempalace_check_duplicate",
+  "mempalace_add_drawer",
+  "mempalace_checkpoint",
+  "mempalace_diary_read",
+  "mempalace_diary_write",
+]
+default_tools_approval_mode = "writes"
+
+[mcp_servers.mempalace.tools.mempalace_add_drawer]
+approval_mode = "prompt"
+
+[mcp_servers.mempalace.tools.mempalace_checkpoint]
+approval_mode = "prompt"
+
+[mcp_servers.mempalace.tools.mempalace_diary_write]
+approval_mode = "prompt"
+
+[mcp_servers.codedb-mcp]
+command = "node"
+args = [
+  "--eval",
+  'const fs=require("node:fs");const path=require("node:path");const url=require("node:url");let root=fs.realpathSync.native(process.cwd());while(!fs.existsSync(path.join(root,".git"))){const parent=path.dirname(root);if(parent===root){console.error("codedb-mcp: could not find a Git project root");process.exit(1)}root=parent}const candidate=path.join(root,"scripts","codedb-mcp.mjs");let script;try{script=fs.realpathSync.native(candidate)}catch{console.error(`codedb-mcp: missing project launcher: ${candidate}`);process.exit(1)}const relative=path.relative(root,script);if(relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative)||!fs.statSync(script).isFile()){console.error("codedb-mcp: project launcher is not a file inside the Git root");process.exit(1)}process.chdir(root);const extra=process.argv.slice(1);process.argv=[process.argv[0],script,"mcp",...extra];import(url.pathToFileURL(script).href).catch((error)=>{console.error(error);process.exit(1)});',
+  "--",
+]
+enabled = true
+required = false
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+enabled_tools = [
+  "codedb_graph_query",
+  "codedb_symbol",
+  "codedb_outline",
+  "codedb_read",
+  "codedb_status",
+]
+default_tools_approval_mode = "approve"
