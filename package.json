@@ -21,7 +21,7 @@
     "ios:mobile:device:prod:release": "pnpm -C apps/mobile ios:device:prod:release",
     "build": "turbo build --filter=!@multica/mobile",
     "typecheck": "turbo typecheck --filter=!@multica/mobile",
-    "test": "node scripts/mempalace.test.mjs && turbo test --filter=!@multica/mobile",
+    "test": "node scripts/mempalace.test.mjs && node scripts/codedb-codex-bootstrap.test.mjs && turbo test --filter=!@multica/mobile",
     "lint": "turbo lint --filter=!@multica/mobile",
     "clean": "turbo clean && rm -rf node_modules",
     "ui:add": "cd packages/ui && npx shadcn@latest add",
@@ -32,7 +32,12 @@
     "memory:mine": "node scripts/mempalace.mjs mine --apply",
     "memory:doctor": "node scripts/mempalace.mjs doctor",
     "memory:smoke": "node scripts/mempalace.mjs smoke",
-    "memory:test": "node scripts/mempalace.test.mjs"
+    "memory:test": "node scripts/mempalace.test.mjs",
+    "codedb:install": "node scripts/codedb-mcp.mjs install",
+    "codedb:index": "node scripts/codedb-mcp.mjs index",
+    "codedb:status": "node scripts/codedb-mcp.mjs status",
+    "codedb:smoke": "node scripts/codedb-mcp.mjs smoke",
+    "codedb:test": "node scripts/codedb-codex-bootstrap.test.mjs"
   },
   "packageManager": "pnpm@10.28.2",
   "pnpm": {

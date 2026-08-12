@@ -54,6 +54,9 @@ make test             # Go tests
 make check            # Full verification pipeline
 ```
 
+For JavaScript/TypeScript code discovery, use the project-level `codedb-mcp`
+integration described in CLAUDE.md. It does not index the Go backend.
+
 See CLAUDE.md for the authoritative rules and common commands.
 
 ### Windows Command Invocation
