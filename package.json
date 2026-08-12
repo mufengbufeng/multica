@@ -21,7 +21,7 @@
     "ios:mobile:device:prod:release": "pnpm -C apps/mobile ios:device:prod:release",
     "build": "turbo build --filter=!@multica/mobile",
     "typecheck": "turbo typecheck --filter=!@multica/mobile",
-    "test": "node scripts/mempalace.test.mjs && node scripts/codedb-codex-bootstrap.test.mjs && turbo test --filter=!@multica/mobile",
+    "test": "node scripts/mempalace.test.mjs && pnpm codedb:test && turbo test --filter=!@multica/mobile",
     "lint": "turbo lint --filter=!@multica/mobile",
     "clean": "turbo clean && rm -rf node_modules",
     "ui:add": "cd packages/ui && npx shadcn@latest add",
@@ -37,7 +37,7 @@
     "codedb:index": "node scripts/codedb-mcp.mjs index",
     "codedb:status": "node scripts/codedb-mcp.mjs status",
     "codedb:smoke": "node scripts/codedb-mcp.mjs smoke",
-    "codedb:test": "node scripts/codedb-codex-bootstrap.test.mjs"
+    "codedb:test": "node --eval \"import('./scripts/codedb-codex-bootstrap.test.mjs')\" -- --probe value"
   },
   "packageManager": "pnpm@10.28.2",
   "pnpm": {

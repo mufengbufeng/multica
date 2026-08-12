@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,10 +20,13 @@ const codedbSection = config.match(
   /\[mcp_servers\.codedb-mcp\]([\s\S]*?)(?=\r?\n\[|$)/,
 )?.[1];
 const bootstrap = codedbSection?.match(
-  /args\s*=\s*\[\s*"--eval",\s*'([^']+)',\s*\]/,
+  /args\s*=\s*\[\s*"--eval",\s*'([^']+)',\s*"--",\s*\]/,
 )?.[1];
 
-assert.ok(bootstrap, "could not read the codedb-mcp bootstrap from .codex/config.toml");
+assert.ok(
+  bootstrap,
+  "could not read the codedb-mcp bootstrap and Node option separator from .codex/config.toml",
+);
 
 const importExpression =
   'import(url.pathToFileURL(script).href).catch((error)=>{console.error(error);process.exit(1)});';
@@ -152,12 +162,40 @@ test("fails at the nearest Git root when its launcher is missing", async () => {
   }
 });
 
-test("passes mcp before any bootstrap arguments", async () => {
+test("rejects a project launcher that resolves outside the Git root", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "multica-codedb-symlink-"));
+  try {
+    const root = await createGitRoot(temp, "repo", { launcher: false });
+    const outsideScripts = join(temp, "outside-scripts");
+    await mkdir(outsideScripts, { recursive: true });
+    await writeFile(join(outsideScripts, "codedb-mcp.mjs"), "export {};\n");
+    await symlink(
+      outsideScripts,
+      join(root, "scripts"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = await runBootstrap(root);
+
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr.join("\n"),
+      /codedb-mcp: project launcher is not a file inside the Git root/,
+    );
+    assert.equal(result.imported, null, "must not import a launcher outside the Git root");
+  } finally {
+    await rm(temp, { force: true, recursive: true });
+  }
+});
+
+test("passes mcp before option-like arguments from the real Node eval command", async () => {
   const temp = await mkdtemp(join(tmpdir(), "multica-codedb-args-"));
   try {
     const root = await createGitRoot(temp, "repo");
+    const args = process.argv.slice(1);
+    assert.deepEqual(args, ["--probe", "value"]);
 
-    const result = await runBootstrap(root, ["--probe", "value"]);
+    const result = await runBootstrap(root, args);
 
     const launcher = resolve(root, "scripts", "codedb-mcp.mjs");
     assert.equal(result.status, 0, result.stderr.join("\n"));
