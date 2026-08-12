@@ -78,3 +78,8 @@ data/
 # Python (agent tooling)
 __pycache__/
 *.pyc
+
+# Project-local MemPalace runtime and generated configuration
+.mempalace-local/
+mempalace.yaml
+entities.json

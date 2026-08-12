@@ -1,0 +1,4 @@
+interface:
+  display_name: "MemPalace Memory"
+  short_description: "Recall and save project decisions safely"
+  default_prompt: "Use project memory to recall prior decisions, then verify them against the current repository."
