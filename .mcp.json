@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "codedb-mcp": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${CLAUDE_PROJECT_DIR:-.}/scripts/codedb-mcp.mjs",
+        "mcp"
+      ],
+      "alwaysLoad": true
+    }
+  }
+}

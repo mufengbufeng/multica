@@ -216,6 +216,24 @@ Rules:
 - Run an explicitly authorized real-agent smoke test with `(cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 go test -tags=agentintegration ./pkg/agent -run '<test-name>' -count=1 -v)`. This command may access an authenticated account and consume quota.
 - When adding a default agent command, add it to `scripts/agent-cli-command-names.txt`; the normal Linux/macOS test entry points fail on ambient agent CLI execution.
 
+## CodeDB MCP
+
+Codex and Claude Code share the project-local `codedb-mcp` server configured
+in `.codex/config.toml` and `.mcp.json`. The downloaded runtime and generated
+index stay ignored under `.codedb-mcp/`; only `codedb-mcp.toml` is committed.
+
+- Prefer `codedb_graph_query` for dependency, caller, path, and structural
+  discovery across the JavaScript/TypeScript codebase.
+- Use `codedb_symbol`, `codedb_outline`, and `codedb_read` for exact, bounded
+  source retrieval. Use `codedb_status` when index freshness is uncertain.
+- The installed `codebase-mcp` version indexes JS/TS but not Go. Continue to
+  use `rg` and normal source reads for `server/` and other unsupported files.
+- Run `pnpm codedb:install`, `pnpm codedb:index`, `pnpm codedb:status`, or
+  `pnpm codedb:smoke` to install, rebuild, inspect, or verify the integration.
+- A fresh checkout needs network access once to download the pinned Windows
+  runtime. Claude Code also requires one-time approval of the shared
+  `.mcp.json` entry; Codex loads its project config only for trusted repos.
+
 ## Verification
 
 For code changes, run the narrowest useful checks while iterating, then run broader verification when risk justifies it or when asked.

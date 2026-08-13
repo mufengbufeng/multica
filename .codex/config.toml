@@ -1,0 +1,16 @@
+[mcp_servers.codedb-mcp]
+command = "node"
+args = ["scripts/codedb-mcp.mjs", "mcp"]
+cwd = "."
+enabled = true
+required = false
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+enabled_tools = [
+  "codedb_graph_query",
+  "codedb_symbol",
+  "codedb_outline",
+  "codedb_read",
+  "codedb_status",
+]
+default_tools_approval_mode = "approve"
